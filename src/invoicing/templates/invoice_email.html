@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body style="margin:0;padding:0;background:#f0f4f4;font-family:'Alexandria','Trebuchet MS',sans-serif">
+
+  <!-- Wrapper -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f4f4;padding:40px 0">
+    <tr><td align="center">
+    <table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%">
+
+      <!-- Header bar -->
+      <tr>
+        <td style="background:#1a5c5c;border-radius:10px 10px 0 0;padding:28px 36px">
+          <p style="margin:0;color:#ffffff;opacity:0.65;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ business_name }}</p>
+          <h1 style="margin:6px 0 0;color:#ffffff;font-size:22px;font-weight:400;letter-spacing:0.5px;font-family:'Alexandria','Trebuchet MS',sans-serif">Tax Invoice</h1>
+        </td>
+      </tr>
+
+      <!-- Personal message -->
+      <tr>
+        <td style="background:#ffffff;padding:32px 36px 24px">
+          <p style="margin:0;color:#334;font-size:15px;line-height:1.75;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ message_html }}</p>
+        </td>
+      </tr>
+
+      <!-- Divider -->
+      <tr><td style="background:#ffffff;padding:0 36px"><div style="height:1px;background:#e0eaea"></div></td></tr>
+
+      <!-- Invoice summary card -->
+      <tr>
+        <td style="background:#ffffff;padding:28px 36px 0">
+          <p style="margin:0 0 16px;color:#1a5c5c;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif">Invoice Summary</p>
+
+          <!-- Meta grid: Student / Period top row, Invoice Date / Invoice # bottom row -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px">
+            <tr>
+              <td style="width:50%;padding-bottom:16px">
+                <p style="margin:0 0 4px;color:#889;font-size:11px;font-family:'Alexandria','Trebuchet MS',sans-serif;text-transform:uppercase;letter-spacing:1px">Student</p>
+                <p style="margin:0;color:#223;font-size:15px;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ student_display_name }}</p>
+              </td>
+              <td style="width:50%;padding-bottom:16px">
+                <p style="margin:0 0 4px;color:#889;font-size:11px;font-family:'Alexandria','Trebuchet MS',sans-serif;text-transform:uppercase;letter-spacing:1px">Period</p>
+                <p style="margin:0;color:#223;font-size:15px;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ period }}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="width:50%">
+                <p style="margin:0 0 4px;color:#889;font-size:11px;font-family:'Alexandria','Trebuchet MS',sans-serif;text-transform:uppercase;letter-spacing:1px">Invoice Date</p>
+                <p style="margin:0;color:#223;font-size:15px;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ invoice_date_str }}</p>
+              </td>
+              <td style="width:50%">
+                <p style="margin:0 0 4px;color:#889;font-size:11px;font-family:'Alexandria','Trebuchet MS',sans-serif;text-transform:uppercase;letter-spacing:1px">Invoice #</p>
+                <p style="margin:0;color:#223;font-size:15px;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ invoice_number }}</p>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Lessons table -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #dde8e8;border-radius:6px;overflow:hidden;border-collapse:separate;border-spacing:0">
+            <tr style="background:#1a5c5c">
+              <th style="padding:10px 16px;color:#ffffff;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif;text-align:left;font-weight:500">Week</th>
+              <th style="padding:10px 16px;color:#ffffff;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif;text-align:left;font-weight:500">Lesson Date</th>
+              <th style="padding:10px 16px;color:#ffffff;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif;text-align:right;font-weight:500">Rate</th>
+            </tr>
+            {% for row in lesson_rows %}
+            <tr style="background:{{ row.bg }}">
+              <td style="padding:10px 16px;color:#445;font-size:13px;border-bottom:1px solid #e8eded">{{ row.index }}</td>
+              <td style="padding:10px 16px;color:#445;font-size:13px;border-bottom:1px solid #e8eded">{{ row.day }} {{ row.date_str }}</td>
+              <td style="padding:10px 16px;color:#445;font-size:13px;border-bottom:1px solid #e8eded;text-align:right">{{ row.rate_str }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+        </td>
+      </tr>
+
+      <!-- Total -->
+      <tr>
+        <td style="background:#ffffff;padding:0 36px 32px">
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:2px">
+            <tr>
+              <td style="padding:10px 16px 0;text-align:right">
+                <span style="color:#1a5c5c;font-size:13px;font-family:'Alexandria','Trebuchet MS',sans-serif;letter-spacing:1px;text-transform:uppercase">Total Due&nbsp;&nbsp;</span>
+                <span style="color:#1a5c5c;font-size:22px;font-weight:600;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ total_str }}</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Payment details -->
+      <tr>
+        <td style="background:#f5fafa;border-top:1px solid #dde8e8;border-radius:0 0 10px 10px;padding:24px 36px">
+          <p style="margin:0 0 12px;color:#1a5c5c;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-family:'Alexandria','Trebuchet MS',sans-serif">Payment Details</p>
+          <table cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="color:#889;font-size:12px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-right:16px;padding-bottom:4px">Name</td>
+              <td style="color:#334;font-size:13px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-bottom:4px">{{ sender_name }}</td>
+            </tr>
+            <tr>
+              <td style="color:#889;font-size:12px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-right:16px;padding-bottom:4px">BSB</td>
+              <td style="color:#334;font-size:13px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-bottom:4px">{{ bsb }}</td>
+            </tr>
+            <tr>
+              <td style="color:#889;font-size:12px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-right:16px;padding-bottom:4px">Account</td>
+              <td style="color:#334;font-size:13px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-bottom:4px">{{ account_number }}</td>
+            </tr>
+            <tr>
+              <td style="color:#889;font-size:12px;font-family:'Alexandria','Trebuchet MS',sans-serif;padding-right:16px">Bank</td>
+              <td style="color:#334;font-size:13px;font-family:'Alexandria','Trebuchet MS',sans-serif">{{ bank_name }}</td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;color:#aab;font-size:11px;font-family:'Alexandria','Trebuchet MS',sans-serif">The full invoice is attached as a PDF to this email. If there are any issues, please contact <a href="mailto:{{ sender_email }}" style="color:#1a5c5c;text-decoration:none">{{ sender_email }}</a>.</p>
+        </td>
+      </tr>
+
+    </table>
+    </td></tr>
+  </table>
+
+</body>
+</html>
