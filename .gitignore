@@ -1,0 +1,33 @@
+# Credentials — never commit
+credentials.json
+token.json
+client_secret*.json
+service_account*.json
+*.pickle
+.env
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Editors
+.vscode/
+.idea/
