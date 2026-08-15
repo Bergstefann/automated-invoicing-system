@@ -94,7 +94,7 @@ def preview(
             seed_database(db)
         bounds, lines = preview_period(db, settings.term_start_date, period)
 
-    typer.echo(f"Period {period}: {bounds.start_date} → {bounds.end_date}")
+    typer.echo(f"Period {period}: {bounds.start_date} -> {bounds.end_date}")
     if not lines:
         typer.echo("  Nothing unbilled for this period.")
         return
