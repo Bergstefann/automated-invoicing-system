@@ -215,10 +215,17 @@ class Database:
 
     def lessons_in_range(self, start: date, end: date) -> list[Lesson]:
         rows = self.conn.execute(
-            "SELECT * FROM lessons WHERE lesson_date >= ? AND lesson_date <= ? ORDER BY lesson_date",
+            "SELECT * FROM lessons WHERE lesson_date >= ? AND lesson_date <= ? "
+            "ORDER BY lesson_date",
             (start.isoformat(), end.isoformat()),
         ).fetchall()
         return [_lesson_from_row(r) for r in rows]
+
+    def get_lesson(self, lesson_id: int) -> Lesson:
+        row = self.conn.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no lesson with id {lesson_id}")
+        return _lesson_from_row(row)
 
     def mark_lessons_billed(self, lesson_ids: list[int], invoice_id: int) -> None:
         self.conn.executemany(
@@ -298,6 +305,27 @@ class Database:
             (emailed_at.isoformat(), invoice_id),
         )
         self.conn.commit()
+
+    def invoices_pending_email(self, period_id: int) -> list[Invoice]:
+        rows = self.conn.execute(
+            "SELECT * FROM invoices WHERE period_id = ? AND emailed_at IS NULL ORDER BY id",
+            (period_id,),
+        ).fetchall()
+        return [_invoice_from_row(r) for r in rows]
+
+    def invoice_lines_for(self, invoice_id: int) -> list[InvoiceLine]:
+        rows = self.conn.execute(
+            "SELECT * FROM invoice_lines WHERE invoice_id = ? ORDER BY id", (invoice_id,)
+        ).fetchall()
+        return [
+            InvoiceLine(
+                id=r["id"],
+                invoice_id=r["invoice_id"],
+                lesson_id=r["lesson_id"],
+                rate_cents=r["rate_cents"],
+            )
+            for r in rows
+        ]
 
     def get_invoice(self, invoice_id: int) -> Invoice:
         row = self.conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()

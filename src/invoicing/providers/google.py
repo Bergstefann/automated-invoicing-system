@@ -19,7 +19,6 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
 from typing import Any
 
 from google.auth.transport.requests import Request
@@ -48,7 +47,6 @@ OAUTH_SCOPES = [
 ]
 
 DAY_COLUMN_PAIRS = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
-BILLABLE_TYPE = "Private"
 _DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})$")
 
 
@@ -99,7 +97,7 @@ class GoogleSheetProvider:
     def _sheets(self) -> Any:
         if self._service is None:
             assert self._settings.sheet_service_account_file is not None
-            creds = service_account.Credentials.from_service_account_file(
+            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
                 str(self._settings.sheet_service_account_file), scopes=SHEETS_SCOPES
             )
             self._service = build("sheets", "v4", credentials=creds).spreadsheets()
@@ -110,9 +108,11 @@ class GoogleSheetProvider:
         assert settings.sheet_id is not None
         service = self._sheets()
 
-        config_result = service.values().get(
-            spreadsheetId=settings.sheet_id, range="Student Config!A:F"
-        ).execute()
+        config_result = (
+            service.values()
+            .get(spreadsheetId=settings.sheet_id, range="Student Config!A:F")
+            .execute()
+        )
         config_rows: list[list[str]] = config_result.get("values", [])
 
         students: list[SheetStudentRecord] = []
@@ -133,16 +133,17 @@ class GoogleSheetProvider:
                 )
             )
 
-        grid_result = service.values().get(
-            spreadsheetId=settings.sheet_id,
-            range=f"'{settings.schedule_tab}'",
-            valueRenderOption="FORMATTED_VALUE",
-        ).execute()
+        grid_result = (
+            service.values()
+            .get(
+                spreadsheetId=settings.sheet_id,
+                range=f"'{settings.schedule_tab}'",
+                valueRenderOption="FORMATTED_VALUE",
+            )
+            .execute()
+        )
         grid: list[list[str]] = grid_result.get("values", [])
 
-        billable_first_names = {
-            s.first_name.lower() for s in students if s.billing_type == BILLABLE_TYPE
-        }
         year = date.today().year
         lessons: list[SheetLessonRecord] = []
         current_col_dates: dict[int, date] = {}
@@ -165,7 +166,7 @@ class GoogleSheetProvider:
                     continue
                 name_val = padded[name_col].strip()
                 status_val = padded[status_col].strip().upper() if status_col < len(padded) else ""
-                if not name_val or not status_val or name_val.lower() not in billable_first_names:
+                if not name_val or not status_val:
                     continue
                 lessons.append(
                     SheetLessonRecord(
@@ -212,14 +213,18 @@ class GoogleDocProvider:
         )
         assert template_id is not None
 
-        copy = drive.files().copy(
-            fileId=template_id,
-            body={
-                "name": f"Invoice {data.invoice_number} - {data.student_display_name}",
-                "parents": [settings.drive_output_folder_id],
-            },
-            supportsAllDrives=True,
-        ).execute()
+        copy = (
+            drive.files()
+            .copy(
+                fileId=template_id,
+                body={
+                    "name": f"Invoice {data.invoice_number} - {data.student_display_name}",
+                    "parents": [settings.drive_output_folder_id],
+                },
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
         doc_id: str = copy["id"]
 
         requests = [
