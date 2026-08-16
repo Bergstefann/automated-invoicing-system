@@ -145,9 +145,9 @@ def test_build_replacements_covers_every_header_placeholder() -> None:
         "<invoiceMonth>",
         "<invoiceYear>",
         "<stuName>",
-        "<subtotal>",
-        "<gst>",
-        "<invoiceTotal>",
+        "$<subtotal>",
+        "$<gst>",
+        "$<invoiceTotal>",
     ):
         assert tag in replacements
         assert replacements[tag] != ""
@@ -174,7 +174,7 @@ def test_build_replacements_switches_to_the_long_template_above_four_lines() -> 
 
 def test_build_replacements_gst_is_always_zero_dollars() -> None:
     replacements = build_replacements(_doc_data(3))
-    assert replacements["<gst>"] == "$0.00"
+    assert replacements["$<gst>"] == "$0.00"
 
 
 def test_applying_replacements_leaves_no_placeholder_tags_in_a_template() -> None:
@@ -191,3 +191,4 @@ def test_applying_replacements_leaves_no_placeholder_tags_in_a_template() -> Non
         rendered = rendered.replace(tag, value)
 
     assert not re.search(r"<[a-zA-Z/]+\d*>", rendered)
+    assert "$<" not in rendered
