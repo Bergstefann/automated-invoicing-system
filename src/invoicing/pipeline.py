@@ -92,11 +92,16 @@ def sync_schedule_into_db(db: Database, sheet: SheetProvider) -> int:
             if lesson_record.status in RAW_STATUS_ATTENDED
             else AttendanceStatus.ABSENT_UNNOTIFIED
         )
+        # YI ("Yes, Invoiced") means attended *and already billed* — by the
+        # pre-rebuild pipeline, before this DB existed. Without this, a
+        # lesson synced as YI would land as ATTENDED with no
+        # billed_invoice_id and get billed again on the next real run.
         db.get_or_create_lesson(
             student_id=student_id,
             lesson_date=lesson_record.lesson_date,
             duration_minutes=DEFAULT_LESSON_DURATION_MINUTES,
             attendance_status=status,
+            pre_billed=lesson_record.status == SheetStatus.INVOICED.value,
         )
         synced += 1
     return synced
@@ -302,10 +307,14 @@ def email_pending_invoices(
         )
 
         assert invoice.doc_url is not None
-        pdf_bytes = docs.export_pdf(invoice.doc_url)
-
         pdf_filename = f"Invoice_{invoice.invoice_number}_{student.name.replace(' ', '_')}.pdf"
+        # export_pdf and send are one unit for rule 7's purposes: either can
+        # fail transiently (a Drive export hiccup is as likely as a Gmail
+        # one), and either failing must degrade to "retry this invoice next
+        # run" rather than crash the whole batch and abandon invoices after
+        # this one that would otherwise have sent fine.
         try:
+            pdf_bytes = docs.export_pdf(invoice.doc_url)
             email.send(
                 to=parent.email,
                 subject=f"Invoice {invoice.invoice_number} — {student.name}",

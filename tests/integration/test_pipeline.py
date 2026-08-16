@@ -5,13 +5,19 @@ autouse network guard.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from invoicing.billing import period_bounds
 from invoicing.db import Database
-from invoicing.models import SheetStatus
-from invoicing.pipeline import email_pending_invoices, run_period
-from invoicing.providers.base import ScheduleSnapshot
+from invoicing.models import AttendanceStatus, SheetStatus
+from invoicing.pipeline import (
+    bill_period,
+    email_pending_invoices,
+    preview_period,
+    run_period,
+    sync_schedule_into_db,
+)
+from invoicing.providers.base import ScheduleSnapshot, SheetLessonRecord, SheetStudentRecord
 from invoicing.providers.fake import FakeDocProvider, FakeEmailProvider, FakeSheetProvider
 from invoicing.seed import TERM_START, seed_database
 
@@ -145,3 +151,175 @@ def test_sheet_write_back_uses_the_preserved_invoiced_status_code(db: Database) 
     for _ref, status in sheet.marked_billed:
         assert status is SheetStatus.INVOICED
         assert status.value == "YI"
+
+
+def test_sync_excludes_yi_lessons_from_future_billing(db: Database) -> None:
+    """Regression test: YI ("Yes, Invoiced") means a lesson was already
+    billed by the pre-rebuild pipeline. sync must exclude it from future
+    billing even though no Invoice row for it exists in this DB — otherwise
+    a real run would re-invoice every already-billed lesson on the sheet."""
+    snapshot = ScheduleSnapshot(
+        students=[
+            SheetStudentRecord(
+                first_name="Will",
+                last_name="Example",
+                billing_type="Private",
+                parent_name="Will Parent",
+                parent_email="will.parent@example.com",
+                rate_cents=4000,
+            )
+        ],
+        lessons=[
+            SheetLessonRecord(student_first_name="Will", lesson_date=TERM_START, status="YI"),
+            SheetLessonRecord(
+                student_first_name="Will",
+                lesson_date=TERM_START + timedelta(days=7),
+                status="Y",
+            ),
+        ],
+    )
+    sheet = FakeSheetProvider(snapshot=snapshot)
+
+    synced = sync_schedule_into_db(db, sheet)
+    assert synced == 2
+
+    bounds = period_bounds(TERM_START, 1)
+    by_date = {
+        lesson.lesson_date: lesson
+        for lesson in db.lessons_in_range(bounds.start_date, bounds.end_date)
+    }
+
+    already_billed = by_date[TERM_START]
+    assert already_billed.attendance_status is AttendanceStatus.ATTENDED
+    assert already_billed.billed_invoice_id is None
+    assert already_billed.pre_billed is True
+    assert already_billed.is_unbilled is False
+
+    still_unbilled = by_date[TERM_START + timedelta(days=7)]
+    assert still_unbilled.pre_billed is False
+    assert still_unbilled.is_unbilled is True
+
+    _, preview_lines = preview_period(db, TERM_START, 1)
+    assert len(preview_lines) == 1
+    assert preview_lines[0].lesson_count == 1
+
+
+def test_rerun_after_partial_email_failure_creates_no_new_invoices_and_sends_only_pending(
+    db: Database,
+) -> None:
+    """Regression test for rule 7: a batch that partially fails to email
+    must not be re-billed on the next run — only the still-pending invoices
+    get (re-)sent, and re-billing must create zero new invoices."""
+    seed_database(db)
+    docs, sheet = FakeDocProvider(), _fake_sheet()
+    flaky_email = FakeEmailProvider(fail_after=10)  # first 10 sends succeed, rest fail
+
+    first = run_period(
+        db, docs, flaky_email, sheet, dry_run=False, send_emails=True, now=NOW, **RUN_KWARGS
+    )
+    assert len(first.invoices_billed) == 15
+    assert len(first.emails.sent) == 10
+    assert len(first.emails.failed) == 5
+
+    healthy_email = FakeEmailProvider()
+    second = run_period(
+        db, docs, healthy_email, sheet, dry_run=False, send_emails=True, now=NOW, **RUN_KWARGS
+    )
+
+    assert len(second.invoices_billed) == 0  # nothing re-billed
+    assert len(second.emails.sent) == 5  # only the previously-failed 5 get sent
+
+    period = db.get_period(PERIOD)
+    assert period is not None and period.id is not None
+    assert len(db.list_invoices(period_id=period.id)) == 15  # never doubled
+
+
+def test_a_pdf_export_failure_fails_only_that_invoice_not_the_whole_batch(db: Database) -> None:
+    """Regression test: a PDF export failure for one invoice (e.g. a
+    transient Drive error) must degrade like a failed send — recorded as
+    failed, retryable later — not crash the rest of the email batch."""
+    seed_database(db)
+    docs, sheet, email = FakeDocProvider(), _fake_sheet(), FakeEmailProvider()
+
+    result = run_period(
+        db, docs, email, sheet, dry_run=False, send_emails=False, now=NOW, **RUN_KWARGS
+    )
+    assert len(result.invoices_billed) == 15
+
+    period = db.get_period(PERIOD)
+    assert period is not None and period.id is not None
+    invoices = db.list_invoices(period_id=period.id)
+    bad_doc_id = invoices[0].doc_url
+    assert bad_doc_id is not None
+    docs.fail_export_doc_ids.add(bad_doc_id)
+
+    emails = email_pending_invoices(
+        db,
+        docs,
+        email,
+        period.id,
+        sender_name="Jane Tutor",
+        sender_email="jane@example.com",
+        personal_message="Thanks for a great fortnight, <student>!",
+        now=NOW,
+    )
+
+    assert emails.failed == [invoices[0].invoice_number]
+    assert len(emails.sent) == 14
+
+
+def test_sync_does_not_fork_a_new_student_when_the_parents_email_changes(db: Database) -> None:
+    """Regression test for a real double-billing incident: a parent's Sheet
+    email changing between syncs (e.g. switching to a +alias for safe
+    testing) must not create a second Student/Parent pair for the same kid.
+    get_or_create_parent keys on email, so a changed email alone used to
+    fork identity in get_or_create_student too — and every lesson for that
+    "new" student then looked unbilled and got billed again."""
+
+    def snapshot(parent_email: str) -> ScheduleSnapshot:
+        return ScheduleSnapshot(
+            students=[
+                SheetStudentRecord(
+                    first_name="Will",
+                    last_name="Example",
+                    billing_type="Private",
+                    parent_name="Will Parent",
+                    parent_email=parent_email,
+                    rate_cents=4000,
+                )
+            ],
+            lessons=[
+                SheetLessonRecord(student_first_name="Will", lesson_date=TERM_START, status="Y"),
+            ],
+        )
+
+    sync_schedule_into_db(db, FakeSheetProvider(snapshot=snapshot("will@example.com")))
+    docs, sheet, email = FakeDocProvider(), _fake_sheet(), FakeEmailProvider()
+    run_period(
+        db,
+        docs,
+        email,
+        sheet,
+        term_start=TERM_START,
+        period_number=1,
+        sender_name="Jane Tutor",
+        sender_email="jane@example.com",
+        personal_message="Thanks!",
+        dry_run=False,
+        send_emails=True,
+        now=NOW,
+    )
+    assert len(db.list_students()) == 1
+    billed_lesson = db.lessons_in_range(TERM_START, TERM_START)[0]
+    assert billed_lesson.billed_invoice_id is not None
+
+    # Same kid, new parent contact email — not a new family.
+    sync_schedule_into_db(db, FakeSheetProvider(snapshot=snapshot("will.new@example.com")))
+
+    assert len(db.list_students()) == 1  # no forked duplicate
+    still_billed = db.lessons_in_range(TERM_START, TERM_START)[0]
+    assert still_billed.id == billed_lesson.id
+    assert still_billed.billed_invoice_id == billed_lesson.billed_invoice_id
+
+    _, second_billed = bill_period(db, docs, sheet, term_start=TERM_START, period_number=1, now=NOW)
+    assert len(second_billed) == 0  # nothing re-billed

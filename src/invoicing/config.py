@@ -11,6 +11,7 @@ import os
 from datetime import date
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, field_validator
 
 
@@ -45,6 +46,11 @@ class Settings(BaseModel):
 
     @classmethod
     def from_env(cls) -> Settings:
+        # Walks up from this file's directory looking for .env, so it's found
+        # regardless of the shell's current working directory. No-op (does
+        # not raise) if no .env exists — real env vars still work standalone.
+        load_dotenv()
+
         def env(name: str, default: str = "") -> str:
             return os.environ.get(f"INVOICING_{name}", default)
 

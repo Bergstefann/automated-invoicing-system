@@ -71,6 +71,12 @@ class Lesson(Model):
     duration_minutes: int = Field(gt=0)
     attendance_status: AttendanceStatus
     billed_invoice_id: int | None = None
+    # True for lessons synced from the Sheet with status YI: already invoiced
+    # by the pre-rebuild pipeline, before this system (or its Invoice table)
+    # existed. No Invoice row backs them — there's no digital record left to
+    # attach — so this is a second, disclosed way a lesson can be "billed",
+    # alongside billed_invoice_id.
+    pre_billed: bool = False
 
     @property
     def is_billable(self) -> bool:
@@ -78,7 +84,7 @@ class Lesson(Model):
 
     @property
     def is_unbilled(self) -> bool:
-        return self.is_billable and self.billed_invoice_id is None
+        return self.is_billable and self.billed_invoice_id is None and not self.pre_billed
 
 
 class BillingPeriod(Model):

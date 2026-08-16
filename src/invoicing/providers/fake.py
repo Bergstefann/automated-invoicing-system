@@ -34,6 +34,7 @@ class FakeSheetProvider:
 @dataclass
 class FakeDocProvider:
     created_docs: dict[str, InvoiceDocData] = field(default_factory=dict)
+    fail_export_doc_ids: set[str] = field(default_factory=set)
     _next_id: int = 1
 
     def create_invoice_doc(self, data: InvoiceDocData) -> str:
@@ -43,6 +44,8 @@ class FakeDocProvider:
         return doc_id
 
     def export_pdf(self, doc_id: str) -> bytes:
+        if doc_id in self.fail_export_doc_ids:
+            raise RuntimeError(f"simulated PDF export failure for {doc_id}")
         if doc_id not in self.created_docs:
             raise KeyError(f"unknown doc_id {doc_id}")
         return f"%PDF-FAKE for {doc_id}".encode()

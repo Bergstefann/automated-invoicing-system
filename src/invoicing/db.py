@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS lessons (
     duration_minutes   INTEGER NOT NULL,
     attendance_status  TEXT NOT NULL,
     billed_invoice_id  INTEGER REFERENCES invoices(id),
+    pre_billed         INTEGER NOT NULL DEFAULT 0,
     UNIQUE (student_id, lesson_date)
 );
 
@@ -152,11 +153,29 @@ class Database:
     def get_or_create_student(
         self, name: str, parent_id: int, instrument: str, rate_cents: int, school: str
     ) -> Student:
-        row = self.conn.execute(
-            "SELECT * FROM students WHERE name = ? AND parent_id = ?", (name, parent_id)
-        ).fetchone()
+        """Matches on `name` alone, not `(name, parent_id)`.
+
+        get_or_create_parent keys on email, and a parent's email can
+        legitimately change (a real incident: switching the Sheet to
+        +alias@gmail.com addresses forked a second parent row per family,
+        and this method — previously matching on (name, parent_id) — forked
+        a second student to match, so every lesson got billed twice under
+        the new copy). Name is the stable identity here — it's also the key
+        `sync_schedule_into_db` already uses to join the Lesson Schedule
+        grid to a student. If the resolved parent_id has changed, repoint
+        the existing student at it instead of forking; the old parent row
+        is simply left unreferenced, not deleted.
+        """
+        row = self.conn.execute("SELECT * FROM students WHERE name = ?", (name,)).fetchone()
         if row is not None:
-            return _student_from_row(row)
+            existing = _student_from_row(row)
+            if existing.parent_id != parent_id:
+                self.conn.execute(
+                    "UPDATE students SET parent_id = ? WHERE id = ?", (parent_id, existing.id)
+                )
+                self.conn.commit()
+                existing = existing.model_copy(update={"parent_id": parent_id})
+            return existing
         return self.insert_student(
             Student(
                 name=name,
@@ -178,14 +197,16 @@ class Database:
     def insert_lesson(self, lesson: Lesson) -> Lesson:
         cur = self.conn.execute(
             "INSERT INTO lessons "
-            "(student_id, lesson_date, duration_minutes, attendance_status, billed_invoice_id) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(student_id, lesson_date, duration_minutes, attendance_status, "
+            " billed_invoice_id, pre_billed) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 lesson.student_id,
                 lesson.lesson_date.isoformat(),
                 lesson.duration_minutes,
                 lesson.attendance_status.value,
                 lesson.billed_invoice_id,
+                int(lesson.pre_billed),
             ),
         )
         self.conn.commit()
@@ -197,6 +218,7 @@ class Database:
         lesson_date: date,
         duration_minutes: int,
         attendance_status: AttendanceStatus,
+        pre_billed: bool = False,
     ) -> Lesson:
         row = self.conn.execute(
             "SELECT * FROM lessons WHERE student_id = ? AND lesson_date = ?",
@@ -210,6 +232,7 @@ class Database:
                 lesson_date=lesson_date,
                 duration_minutes=duration_minutes,
                 attendance_status=attendance_status,
+                pre_billed=pre_billed,
             )
         )
 
@@ -374,6 +397,7 @@ def _lesson_from_row(row: sqlite3.Row) -> Lesson:
         duration_minutes=row["duration_minutes"],
         attendance_status=AttendanceStatus(row["attendance_status"]),
         billed_invoice_id=row["billed_invoice_id"],
+        pre_billed=bool(row["pre_billed"]),
     )
 
 
