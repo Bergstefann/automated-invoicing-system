@@ -146,9 +146,10 @@ erDiagram
 
 | Command | Flags | Does |
 |---|---|---|
-| `invoicing sync` | `--demo` | Pull the Sheet into SQLite (or seed the synthetic dataset in demo mode). |
+| `invoicing sync` | `--demo` \| `--real` (exactly one, required) | Pull the Sheet into SQLite (or seed the synthetic dataset in demo mode). |
 | `invoicing preview` | `--period N`, `--demo` | Show what would be invoiced. Read-only, zero writes. |
-| `invoicing run` | `--period N`, `--dry-run/--no-dry-run` (default `--dry-run`), `--confirm`, `--demo`, `--message` | Bill unbilled lessons, then email the results. `--no-dry-run` alone bills but sends nothing; `--confirm` is required to actually send. |
+| `invoicing run` | `--period N`, `--dry-run/--no-dry-run` (default `--dry-run`), `--confirm`, `--demo` \| `--real` (exactly one, required), `--message` | Bill unbilled lessons, then email the results. `--no-dry-run` alone bills but sends nothing; `--confirm` is required to actually send. |
+| `invoicing debug-parse-schedule` | `--demo` \| `--real` (exactly one, required) | Read-only: runs only `read_schedule()` and prints the parsed students/lessons. No DB writes, no billing, no email — for checking a SheetProvider's parsing against a real sheet's actual layout before trusting it with `run --real`. |
 | `invoicing status` | `--demo` | Summary of every period: invoices, emailed, pending. |
 | *(any command)* | `--verbose` | Debug-level logging. |
 

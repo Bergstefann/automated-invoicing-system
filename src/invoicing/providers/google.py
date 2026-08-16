@@ -12,13 +12,15 @@ this rebuild's real test environment was provisioned with one OAuth desktop
 client covering all four APIs, so Sheets moved onto the same flow rather
 than requiring a second credential file nobody asked for.
 
-Sheet layout: the real test Sheet used to build and verify this provider is
-a flat grid — row 1 is a header (col A label, then one column per lesson
-date), and each subsequent row is one student (col A = first name, then one
-status cell per date column). That's simpler than the original's
-weekly-block layout (see Step 0 report) and is treated here as the current
-source of truth for what a "Lesson Schedule" tab looks like; the original's
-nested date-block parser was not reused.
+Sheet layout: the real test Sheet's Lesson Schedule tab turned out to match
+the original's nested weekly-block layout (see Step 0 report), not a flat
+grid — dates wrap downward in blocks: a header row holds one date per
+name-column position, and the rows below it hold [name, status] pairs until
+the next header row appears, repeating every ~9 rows in the test data. The
+parser below mirrors the original's mechanism (block detection via
+"how many cells in this row parse as a date") but doesn't hardcode the
+day-column count the way the original's `DAY_COLUMN_PAIRS` did, since that
+count wasn't verified against the live sheet.
 """
 
 from __future__ import annotations
@@ -77,6 +79,17 @@ def _parse_date_cell(cell_text: str, year: int) -> date | None:
         return None
 
 
+def _is_header_row(row: list[str], year: int, min_dates: int = 2) -> bool:
+    """A header row is one where at least `min_dates` name-column positions
+    (even indices: 0, 2, 4, ...) hold a parseable date — mirrors the
+    original's block-detection heuristic exactly."""
+    name_position_cells = row[0::2]
+    return (
+        sum(1 for cell in name_position_cells if _parse_date_cell(cell, year) is not None)
+        >= min_dates
+    )
+
+
 def _col_letter(zero_based_index: int) -> str:
     result = ""
     idx = zero_based_index + 1
@@ -110,15 +123,16 @@ def _oauth_credentials(settings: Settings) -> Any:
 class GoogleSheetProvider:
     """Wraps the Sheets API via the shared OAuth flow.
 
-    Lesson Schedule tab is a flat grid: row 1 = header (col A + one column
-    per lesson date), row 2+ = one student per row (col A = first name,
-    then one status cell per date column). `read_schedule` builds
-    `self._cell_index`, a (first_name.lower(), date) -> (row, col) map
-    (both 0-based) that `mark_lessons_billed` depends on to know which
-    cell to write back to — so `read_schedule` must have been called at
-    least once in this provider's lifetime before `mark_lessons_billed` can
-    do anything. `pipeline.sync_schedule_into_db` calling `read_schedule`
-    before billing (see cli.py's `run` command) guarantees that ordering.
+    Lesson Schedule tab is the original's nested weekly-block layout: dates
+    wrap downward, a header row holds one date per name-column position, and
+    the rows below hold [name, status] column pairs until the next header
+    row appears. `read_schedule` builds `self._cell_index`, a
+    (first_name.lower(), date) -> (row, status_col) map (both 0-based) that
+    `mark_lessons_billed` depends on to know which cell to write back to —
+    so `read_schedule` must have been called at least once in this
+    provider's lifetime before `mark_lessons_billed` can do anything.
+    `pipeline.sync_schedule_into_db` calling `read_schedule` before billing
+    (see cli.py's `run` command) guarantees that ordering.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -176,7 +190,7 @@ class GoogleSheetProvider:
         )
         grid: list[list[str]] = grid_result.get("values", [])
 
-        lessons, self._cell_index = _parse_flat_schedule(grid, year=date.today().year)
+        lessons, self._cell_index = _parse_blocked_schedule(grid, year=date.today().year)
         return ScheduleSnapshot(students=students, lessons=lessons)
 
     def mark_lessons_billed(self, lesson_refs: list[SheetLessonRef], status: SheetStatus) -> None:
@@ -212,42 +226,54 @@ class GoogleSheetProvider:
         ).execute()
 
 
-def _parse_flat_schedule(
+def _parse_blocked_schedule(
     grid: list[list[str]], year: int | None = None
 ) -> tuple[list[SheetLessonRecord], dict[tuple[str, date], tuple[int, int]]]:
-    """Row 0 = header (col 0 + one date per remaining column). Row 1+ = one
-    student per row (col 0 = first name, remaining cols = status per date).
+    """Dates wrap downward in blocks. A header row (detected via
+    `_is_header_row`) holds one date per name-column position (even
+    indices); every row below it — until the next header row — holds
+    [name, status] pairs at those same column positions. Mirrors the
+    original's `parse_schedule`, generalized to not assume a fixed number
+    of day-columns per header row.
+
     Returns the parsed lessons plus a (first_name.lower(), date) -> (row,
-    col) index (both 0-based) for `mark_lessons_billed` to write back to.
+    status_col) index (both 0-based) for `mark_lessons_billed` to write
+    back to. The index is built for every [name, status] pair encountered,
+    even ones with a blank status, so a cell can always be resolved once a
+    lesson there gets billed.
     """
     if not grid:
         return [], {}
 
     year = year if year is not None else date.today().year
-    header = grid[0]
-    date_columns: dict[int, date] = {}
-    for col_index, cell in enumerate(header):
-        if col_index == 0:
-            continue
-        parsed = _parse_date_cell(cell, year)
-        if parsed:
-            date_columns[col_index] = parsed
-
     lessons: list[SheetLessonRecord] = []
     cell_index: dict[tuple[str, date], tuple[int, int]] = {}
+    current_col_dates: dict[int, date] = {}
 
     for row_index, row in enumerate(grid):
-        if row_index == 0 or not row or not row[0].strip():
+        if _is_header_row(row, year):
+            current_col_dates = {}
+            for name_col in range(0, len(row), 2):
+                parsed = _parse_date_cell(row[name_col], year)
+                if parsed:
+                    current_col_dates[name_col] = parsed
             continue
-        first_name = row[0].strip()
-        for col_index, lesson_date in date_columns.items():
-            status_val = row[col_index].strip().upper() if col_index < len(row) else ""
-            cell_index[(first_name.lower(), lesson_date)] = (row_index, col_index)
+
+        if not current_col_dates:
+            continue
+
+        for name_col, lesson_date in current_col_dates.items():
+            status_col = name_col + 1
+            name_val = row[name_col].strip() if name_col < len(row) else ""
+            if not name_val:
+                continue
+            status_val = row[status_col].strip().upper() if status_col < len(row) else ""
+            cell_index[(name_val.lower(), lesson_date)] = (row_index, status_col)
             if not status_val:
                 continue
             lessons.append(
                 SheetLessonRecord(
-                    student_first_name=first_name, lesson_date=lesson_date, status=status_val
+                    student_first_name=name_val, lesson_date=lesson_date, status=status_val
                 )
             )
 
