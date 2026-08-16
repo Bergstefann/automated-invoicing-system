@@ -82,3 +82,22 @@ def test_preview_is_read_only() -> None:
     assert "Student" in result.stdout
     assert "Lessons" in result.stdout
     assert _invoice_count_for_period(3) == 0
+
+
+def test_run_without_demo_or_real_refuses_to_guess() -> None:
+    result = runner.invoke(app, ["run", "--period", "3"])
+    assert result.exit_code == 1
+    assert "--demo" in result.stdout
+    assert "--real" in result.stdout
+
+
+def test_run_with_both_demo_and_real_refuses_the_ambiguity() -> None:
+    result = runner.invoke(app, ["run", "--period", "3", "--demo", "--real"])
+    assert result.exit_code == 1
+
+
+def test_sync_without_demo_or_real_refuses_to_guess() -> None:
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 1
+    assert "--demo" in result.stdout
+    assert "--real" in result.stdout

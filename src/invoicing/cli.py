@@ -1,9 +1,11 @@
 """Typer CLI entry point.
 
-Safety posture: `run` defaults to --dry-run (zero writes anywhere). Turning
-that off with --no-dry-run still won't send a single email unless --confirm
-is also passed — there is no single flag that both bills and emails by
-accident.
+Safety posture:
+- `sync` and `run` require an explicit --demo or --real — there's no
+  default that could send you to live Google APIs because you forgot a flag.
+- `run` defaults to --dry-run (zero writes anywhere). Turning that off with
+  --no-dry-run still won't send a single email unless --confirm is also
+  passed — there is no single flag that both bills and emails by accident.
 """
 
 from __future__ import annotations
@@ -44,6 +46,18 @@ def main(
     _configure_logging(verbose)
 
 
+def _require_explicit_mode(demo: bool, real: bool) -> None:
+    """Neither flag defaulting to "real" would make it too easy to hit live
+    Google APIs by typing the command you always type and forgetting a flag.
+    Both commands that can reach Google (`sync`, `run`) require picking one."""
+    if demo and real:
+        typer.echo("Pass --demo or --real, not both.")
+        raise typer.Exit(code=1)
+    if not demo and not real:
+        typer.echo("Pass --demo (fake providers, synthetic data) or --real (live Google APIs).")
+        raise typer.Exit(code=1)
+
+
 def _load_settings(demo: bool) -> Settings:
     return Settings.for_demo() if demo else Settings.from_env()
 
@@ -69,8 +83,10 @@ def _fmt_cents(cents: int) -> str:
 @app.command()
 def sync(
     demo: bool = typer.Option(False, "--demo", help="Seed the synthetic dataset instead."),
+    real: bool = typer.Option(False, "--real", help="Pull from the real, live Google Sheet."),
 ) -> None:
     """Pull the Sheet into SQLite."""
+    _require_explicit_mode(demo, real)
     settings = _load_settings(demo)
     with Database(settings.db_path) as db:
         if demo:
@@ -121,11 +137,15 @@ def run(
     demo: bool = typer.Option(
         False, "--demo", help="Use fake providers and the synthetic dataset."
     ),
+    real: bool = typer.Option(
+        False, "--real", help="Use the real Google Sheet/Docs/Gmail — required instead of --demo."
+    ),
     message: str = typer.Option(
         DEFAULT_MESSAGE, "--message", help="Personal message. Supports <student> and <parent>."
     ),
 ) -> None:
     """Bill unbilled lessons for a period, then email the resulting invoices."""
+    _require_explicit_mode(demo, real)
     settings = _load_settings(demo)
     now = datetime.now(UTC)
 
