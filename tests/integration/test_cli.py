@@ -101,3 +101,20 @@ def test_sync_without_demo_or_real_refuses_to_guess() -> None:
     assert result.exit_code == 1
     assert "--demo" in result.stdout
     assert "--real" in result.stdout
+
+
+def test_debug_parse_schedule_is_read_only_and_makes_no_writes() -> None:
+    result = runner.invoke(app, ["debug-parse-schedule", "--demo"])
+    assert result.exit_code == 0
+    assert "Student Config" in result.stdout
+    assert "Lesson Schedule" in result.stdout
+    # --demo wires up an empty fake Sheet snapshot — nothing to parse, and
+    # critically, no demo.db gets created since this command never touches SQLite.
+    assert not Path("demo.db").exists()
+
+
+def test_debug_parse_schedule_without_demo_or_real_refuses_to_guess() -> None:
+    result = runner.invoke(app, ["debug-parse-schedule"])
+    assert result.exit_code == 1
+    assert "--demo" in result.stdout
+    assert "--real" in result.stdout

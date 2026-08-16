@@ -73,11 +73,27 @@ class Settings(BaseModel):
     def for_demo(cls) -> Settings:
         return cls(db_path=Path("demo.db"), demo=True)
 
-    def require_google_config(self) -> None:
-        """Raise if live Google configuration is incomplete. Never called in --demo mode."""
+    def require_sheet_config(self) -> None:
+        """Raise if the Sheet-only configuration is incomplete.
+
+        Deliberately narrower than `require_google_config`: reading the
+        schedule needs a sheet ID and OAuth credentials, nothing about Docs
+        or Drive output. This lets `debug-parse-schedule` run — and let you
+        check the parser against a real sheet — before Drive/Doc setup is
+        finished.
+        """
         required: dict[str, str | Path | None] = {
             "INVOICING_SHEET_ID": self.sheet_id,
             "INVOICING_OAUTH_CLIENT_SECRET_FILE": self.oauth_client_secret_file,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError("Missing required configuration for live mode: " + ", ".join(missing))
+
+    def require_google_config(self) -> None:
+        """Raise if live Google configuration is incomplete. Never called in --demo mode."""
+        self.require_sheet_config()
+        required: dict[str, str | Path | None] = {
             "INVOICING_DRIVE_OUTPUT_FOLDER_ID": self.drive_output_folder_id,
             "INVOICING_DOC_TEMPLATE_SHORT_ID": self.doc_template_short_id,
             "INVOICING_DOC_TEMPLATE_LONG_ID": self.doc_template_long_id,

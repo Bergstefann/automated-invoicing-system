@@ -203,13 +203,20 @@ def debug_parse_schedule(
     """Read-only: run only read_schedule() and print what it parsed.
 
     Calls nothing else — no DB writes, no billing, no Sheet write-back, no
-    email. This exists specifically to let you check a SheetProvider's
-    parsing against the real Sheet's actual layout before trusting it with
-    `run --real`.
+    email. Deliberately needs only Sheet + OAuth config (not Drive/Doc
+    settings, unlike every other real-mode command) so the parser can be
+    checked against a real sheet's actual layout before the rest of the
+    setup — Drive folder, Doc templates — even has to exist.
     """
     _require_explicit_mode(demo, real)
     settings = _load_settings(demo)
-    sheet_provider, _doc, _email = _build_providers(settings, demo)
+
+    sheet_provider: SheetProvider
+    if demo:
+        sheet_provider = FakeSheetProvider(snapshot=ScheduleSnapshot(students=[], lessons=[]))
+    else:
+        settings.require_sheet_config()
+        sheet_provider = GoogleSheetProvider(settings)
 
     snapshot = sheet_provider.read_schedule()
 
