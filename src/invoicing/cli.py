@@ -195,6 +195,47 @@ def run(
         )
 
 
+@app.command(name="debug-parse-schedule")
+def debug_parse_schedule(
+    demo: bool = typer.Option(False, "--demo", help="Use the synthetic dataset."),
+    real: bool = typer.Option(False, "--real", help="Parse the real, live Google Sheet."),
+) -> None:
+    """Read-only: run only read_schedule() and print what it parsed.
+
+    Calls nothing else — no DB writes, no billing, no Sheet write-back, no
+    email. This exists specifically to let you check a SheetProvider's
+    parsing against the real Sheet's actual layout before trusting it with
+    `run --real`.
+    """
+    _require_explicit_mode(demo, real)
+    settings = _load_settings(demo)
+    sheet_provider, _doc, _email = _build_providers(settings, demo)
+
+    snapshot = sheet_provider.read_schedule()
+
+    typer.echo(f"Student Config: {len(snapshot.students)} student(s)")
+    typer.echo(f"{'First':<14}{'Last':<14}{'Billing':<10}{'Rate':>8}  Parent (name / email)")
+    typer.echo("-" * 78)
+    for s in snapshot.students:
+        typer.echo(
+            f"{s.first_name:<14}{s.last_name:<14}{s.billing_type:<10}"
+            f"{_fmt_cents(s.rate_cents):>8}  {s.parent_name} <{s.parent_email}>"
+        )
+
+    typer.echo(f"\nLesson Schedule: {len(snapshot.lessons)} parsed cell(s)")
+    typer.echo(f"{'Date':<12}{'Student':<20}Status")
+    typer.echo("-" * 42)
+    for lesson in sorted(
+        snapshot.lessons, key=lambda lesson: (lesson.lesson_date, lesson.student_first_name)
+    ):
+        typer.echo(
+            f"{lesson.lesson_date.isoformat():<12}{lesson.student_first_name:<20}{lesson.status}"
+        )
+
+    if not snapshot.lessons:
+        typer.echo("  (nothing parsed — check the parser against the actual sheet layout)")
+
+
 @app.command()
 def status(
     demo: bool = typer.Option(False, "--demo", help="Use the synthetic dataset."),
