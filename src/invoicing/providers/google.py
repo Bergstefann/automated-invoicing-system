@@ -3,15 +3,29 @@
 This module is never imported by the test suite and never exercised by
 `--demo` mode — it is only reached when the CLI runs without `--demo` and
 `Settings.require_google_config()` has already confirmed real credentials
-are configured. OAuth scopes are preserved exactly from the original
-pipeline (see Step 0 report): a spreadsheets-only service-account scope for
-Sheets, and a broad Docs + Drive + full-Gmail scope for the OAuth flow.
+are configured.
+
+Auth model: everything — Sheets, Docs, Drive, Gmail — goes through a single
+shared OAuth installed-app flow (`credentials.json` + a locally cached
+token). The original pipeline used a *separate* service account for Sheets;
+this rebuild's real test environment was provisioned with one OAuth desktop
+client covering all four APIs, so Sheets moved onto the same flow rather
+than requiring a second credential file nobody asked for.
+
+Sheet layout: the real test Sheet used to build and verify this provider is
+a flat grid — row 1 is a header (col A label, then one column per lesson
+date), and each subsequent row is one student (col A = first name, then one
+status cell per date column). That's simpler than the original's
+weekly-block layout (see Step 0 report) and is treated here as the current
+source of truth for what a "Lesson Schedule" tab looks like; the original's
+nested date-block parser was not reused.
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import logging
 import pickle
 import re
 from datetime import date
@@ -22,7 +36,6 @@ from email.mime.text import MIMEText
 from typing import Any
 
 from google.auth.transport.requests import Request
-from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -39,14 +52,16 @@ from invoicing.providers.base import (
 )
 from invoicing.templates.invoice_doc import build_replacements
 
-SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+logger = logging.getLogger("invoicing.providers.google")
+
 OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive",
     "https://mail.google.com/",
 ]
 
-DAY_COLUMN_PAIRS = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
+STUDENT_CONFIG_RANGE = "Student Config!A:E"
 _DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})$")
 
 
@@ -62,8 +77,13 @@ def _parse_date_cell(cell_text: str, year: int) -> date | None:
         return None
 
 
-def _is_header_row(row: list[str], year: int, min_dates: int = 2) -> bool:
-    return sum(1 for cell in row if _parse_date_cell(cell, year) is not None) >= min_dates
+def _col_letter(zero_based_index: int) -> str:
+    result = ""
+    idx = zero_based_index + 1
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        result = chr(65 + rem) + result
+    return result
 
 
 def _oauth_credentials(settings: Settings) -> Any:
@@ -88,18 +108,27 @@ def _oauth_credentials(settings: Settings) -> Any:
 
 
 class GoogleSheetProvider:
-    """Wraps the Sheets API. Auth is a service account, scoped to Sheets only."""
+    """Wraps the Sheets API via the shared OAuth flow.
+
+    Lesson Schedule tab is a flat grid: row 1 = header (col A + one column
+    per lesson date), row 2+ = one student per row (col A = first name,
+    then one status cell per date column). `read_schedule` builds
+    `self._cell_index`, a (first_name.lower(), date) -> (row, col) map
+    (both 0-based) that `mark_lessons_billed` depends on to know which
+    cell to write back to — so `read_schedule` must have been called at
+    least once in this provider's lifetime before `mark_lessons_billed` can
+    do anything. `pipeline.sync_schedule_into_db` calling `read_schedule`
+    before billing (see cli.py's `run` command) guarantees that ordering.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._service: Any | None = None
+        self._cell_index: dict[tuple[str, date], tuple[int, int]] = {}
 
     def _sheets(self) -> Any:
         if self._service is None:
-            assert self._settings.sheet_service_account_file is not None
-            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-                str(self._settings.sheet_service_account_file), scopes=SHEETS_SCOPES
-            )
+            creds = _oauth_credentials(self._settings)
             self._service = build("sheets", "v4", credentials=creds).spreadsheets()
         return self._service
 
@@ -110,7 +139,7 @@ class GoogleSheetProvider:
 
         config_result = (
             service.values()
-            .get(spreadsheetId=settings.sheet_id, range="Student Config!A:F")
+            .get(spreadsheetId=settings.sheet_id, range=STUDENT_CONFIG_RANGE)
             .execute()
         )
         config_rows: list[list[str]] = config_result.get("values", [])
@@ -119,16 +148,19 @@ class GoogleSheetProvider:
         for row in config_rows[1:]:
             if not row or not row[0].strip():
                 continue
-            padded = row + [""] * max(0, 6 - len(row))
-            raw_rate = padded[3].strip() or "40"
+            # Columns: A first name, B parent email, C rate, D parent name,
+            # E student last name — this test sheet has no billing-type
+            # column, so every listed student is treated as billable.
+            padded = row + [""] * max(0, 5 - len(row))
+            raw_rate = padded[2].strip() or "40"
             rate_dollars = float("".join(c for c in raw_rate if c.isdigit() or c == ".") or 40)
             students.append(
                 SheetStudentRecord(
                     first_name=padded[0].strip(),
-                    last_name=padded[5].strip(),
-                    billing_type=(padded[1].strip() or "Action"),
-                    parent_name=padded[4].strip(),
-                    parent_email=padded[2].strip(),
+                    last_name=padded[4].strip(),
+                    billing_type="Private",
+                    parent_name=padded[3].strip(),
+                    parent_email=padded[1].strip(),
                     rate_cents=round(rate_dollars * 100),
                 )
             )
@@ -144,47 +176,82 @@ class GoogleSheetProvider:
         )
         grid: list[list[str]] = grid_result.get("values", [])
 
-        year = date.today().year
-        lessons: list[SheetLessonRecord] = []
-        current_col_dates: dict[int, date] = {}
-
-        for row in grid:
-            padded = row + [""] * max(0, 10 - len(row))
-            if _is_header_row(padded, year):
-                current_col_dates = {}
-                for name_col, _status_col in DAY_COLUMN_PAIRS:
-                    parsed = _parse_date_cell(padded[name_col], year)
-                    if parsed:
-                        current_col_dates[name_col] = parsed
-                continue
-
-            if not current_col_dates:
-                continue
-
-            for name_col, status_col in DAY_COLUMN_PAIRS:
-                if name_col not in current_col_dates:
-                    continue
-                name_val = padded[name_col].strip()
-                status_val = padded[status_col].strip().upper() if status_col < len(padded) else ""
-                if not name_val or not status_val:
-                    continue
-                lessons.append(
-                    SheetLessonRecord(
-                        student_first_name=name_val,
-                        lesson_date=current_col_dates[name_col],
-                        status=status_val,
-                    )
-                )
-
+        lessons, self._cell_index = _parse_flat_schedule(grid, year=date.today().year)
         return ScheduleSnapshot(students=students, lessons=lessons)
 
     def mark_lessons_billed(self, lesson_refs: list[SheetLessonRef], status: SheetStatus) -> None:
-        # A real write-back needs each ref's sheet row/column, which this
-        # provider resolves from its own index built during read_schedule
-        # (an internal detail, deliberately not part of the Protocol).
-        raise NotImplementedError(
-            "wire up row/column resolution against a live sheet before enabling live runs"
-        )
+        data: list[dict[str, Any]] = []
+        for ref in lesson_refs:
+            # student_key comes from the DB's full "First Last" display
+            # name; the sheet only knows first names, so match on that.
+            first_name_key = ref.student_key.split()[0].lower() if ref.student_key else ""
+            cell = self._cell_index.get((first_name_key, ref.lesson_date))
+            if cell is None:
+                logger.warning(
+                    "no Sheet cell found for %s on %s — DB is billed, Sheet won't reflect it "
+                    "until the next sync",
+                    ref.student_key,
+                    ref.lesson_date,
+                )
+                continue
+            row, col = cell
+            data.append(
+                {
+                    "range": f"'{self._settings.schedule_tab}'!{_col_letter(col)}{row + 1}",
+                    "values": [[status.value]],
+                }
+            )
+
+        if not data:
+            return
+
+        service = self._sheets()
+        service.values().batchUpdate(
+            spreadsheetId=self._settings.sheet_id,
+            body={"valueInputOption": "RAW", "data": data},
+        ).execute()
+
+
+def _parse_flat_schedule(
+    grid: list[list[str]], year: int | None = None
+) -> tuple[list[SheetLessonRecord], dict[tuple[str, date], tuple[int, int]]]:
+    """Row 0 = header (col 0 + one date per remaining column). Row 1+ = one
+    student per row (col 0 = first name, remaining cols = status per date).
+    Returns the parsed lessons plus a (first_name.lower(), date) -> (row,
+    col) index (both 0-based) for `mark_lessons_billed` to write back to.
+    """
+    if not grid:
+        return [], {}
+
+    year = year if year is not None else date.today().year
+    header = grid[0]
+    date_columns: dict[int, date] = {}
+    for col_index, cell in enumerate(header):
+        if col_index == 0:
+            continue
+        parsed = _parse_date_cell(cell, year)
+        if parsed:
+            date_columns[col_index] = parsed
+
+    lessons: list[SheetLessonRecord] = []
+    cell_index: dict[tuple[str, date], tuple[int, int]] = {}
+
+    for row_index, row in enumerate(grid):
+        if row_index == 0 or not row or not row[0].strip():
+            continue
+        first_name = row[0].strip()
+        for col_index, lesson_date in date_columns.items():
+            status_val = row[col_index].strip().upper() if col_index < len(row) else ""
+            cell_index[(first_name.lower(), lesson_date)] = (row_index, col_index)
+            if not status_val:
+                continue
+            lessons.append(
+                SheetLessonRecord(
+                    student_first_name=first_name, lesson_date=lesson_date, status=status_val
+                )
+            )
+
+    return lessons, cell_index
 
 
 class GoogleDocProvider:

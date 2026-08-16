@@ -134,6 +134,14 @@ def run(
             seed_database(db)
         sheet_provider, doc_provider, email_provider = _build_providers(settings, demo)
 
+        if not demo and not dry_run:
+            # Sync right before billing (not during dry-run, which must make
+            # zero writes) so the schedule is fresh and — for the real
+            # GoogleSheetProvider — its row/column index is warm before
+            # mark_lessons_billed needs it.
+            synced = sync_schedule_into_db(db, sheet_provider)
+            logger.info("synced %d lesson(s) from the Sheet before billing", synced)
+
         result = run_period(
             db,
             doc_provider,

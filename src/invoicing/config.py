@@ -19,7 +19,6 @@ class Settings(BaseModel):
     term_start: str = "2026-02-02"
 
     sheet_id: str | None = None
-    sheet_service_account_file: Path | None = None
     schedule_tab: str = "Term 1 2026"
 
     oauth_client_secret_file: Path | None = None
@@ -60,7 +59,6 @@ class Settings(BaseModel):
             db_path=Path(env("DB_PATH", "invoicing.db")),
             term_start=env("TERM_START", "2026-02-02"),
             sheet_id=opt_env("SHEET_ID"),
-            sheet_service_account_file=opt_path("SHEET_SERVICE_ACCOUNT_FILE"),
             schedule_tab=env("SCHEDULE_TAB", "Term 1 2026"),
             oauth_client_secret_file=opt_path("OAUTH_CLIENT_SECRET_FILE"),
             oauth_token_file=opt_path("OAUTH_TOKEN_FILE"),
@@ -79,7 +77,6 @@ class Settings(BaseModel):
         """Raise if live Google configuration is incomplete. Never called in --demo mode."""
         required: dict[str, str | Path | None] = {
             "INVOICING_SHEET_ID": self.sheet_id,
-            "INVOICING_SHEET_SERVICE_ACCOUNT_FILE": self.sheet_service_account_file,
             "INVOICING_OAUTH_CLIENT_SECRET_FILE": self.oauth_client_secret_file,
             "INVOICING_DRIVE_OUTPUT_FOLDER_ID": self.drive_output_folder_id,
             "INVOICING_DOC_TEMPLATE_SHORT_ID": self.doc_template_short_id,
