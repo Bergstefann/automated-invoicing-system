@@ -1,12 +1,20 @@
 """Google Doc invoice template field mapping.
 
-Placeholder tags and table layout are preserved exactly from the original
-template: per-row placeholders `<dayOfWeek{n}>`, `<DD/MM{n}>`, `<name{n}>`,
-`<rate{n}>` for n up to the template's row capacity, plus header
-placeholders `<parentName>`, `<parentEmail>`, `<invID>`, `<invoiceDay>`,
-`<invoiceMonth>`, `<invoiceYear>`, `<stuName>`, `$<subtotal>`, `$<gst>`,
-`$<invoiceTotal>`. Rows beyond the actual lesson count are blanked, not
-removed — same behaviour as the original.
+Placeholder tags and table layout: per-row placeholders `<dayOfWeek{n}>`,
+`<DD/MM{n}>`, `<name{n}>`, `<rate{n}>` for n up to the template's row
+capacity, plus header placeholders `<parentName>`, `<parentEmail>`,
+`<invID>`, `<invoiceDay>`, `<invoiceMonth>`, `<invoiceYear>`, `<stuName>`,
+`<subtotal>`, `<gst>`, `<invoiceTotal>`. Rows beyond the actual lesson count
+are blanked, not removed.
+
+Note: the original template had a literal "$" baked into its static text
+next to these three tags (`$<subtotal>`), so the code only replaced the
+bracketed part. The real Doc templates this rebuild was wired up against
+use bare `<subtotal>`/`<gst>`/`<invoiceTotal>` instead, so the dollar sign
+is now included in the replacement value itself (see `_fmt_cents`). If a
+template ever reintroduces a literal "$" before the tag, this needs
+updating back — it was not verified against the live Doc content directly,
+only against how the tags were described.
 """
 
 from __future__ import annotations
@@ -38,9 +46,9 @@ def build_replacements(data: InvoiceDocData) -> dict[str, str]:
         "<invoiceMonth>": f"{data.invoice_date.month:02d}",
         "<invoiceYear>": str(data.invoice_date.year),
         "<stuName>": data.student_display_name,
-        "$<subtotal>": _fmt_cents(data.subtotal_cents),
-        "$<gst>": _fmt_cents(data.gst_cents),
-        "$<invoiceTotal>": _fmt_cents(data.total_cents),
+        "<subtotal>": _fmt_cents(data.subtotal_cents),
+        "<gst>": _fmt_cents(data.gst_cents),
+        "<invoiceTotal>": _fmt_cents(data.total_cents),
     }
 
     for i, line in enumerate(data.lines, start=1):
