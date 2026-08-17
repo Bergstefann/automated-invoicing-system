@@ -177,6 +177,47 @@ pytest --cov=src/invoicing --cov-report=term-missing
 - `.gitignore` blocks `credentials.json`, `token.json`, `*.pickle`, `.env`, and `*.db` from ever being committed — configured before the first commit landed, not after.
 - Everything demonstrable in this repo — the seed dataset, README output, this document — is synthetic. No real student, parent, email address, or bank detail appears anywhere in the history.
 
+## Scheduled preview
+
+The domain here is inherently recurring — a fortnight closes, someone has to notice
+and decide whether to bill it — but nothing in this repo bills or emails an invoice
+unattended, on purpose. [`deploy/scheduled_preview.py`](deploy/scheduled_preview.py)
+runs on a weekly [GitHub Actions schedule](.github/workflows/scheduled-preview.yml):
+it syncs the Sheet, works out whether the most recently completed period is unbilled,
+and **emails the operator a preview** — never `run --confirm`. `sync` and `preview`
+are both zero-write from a billing perspective (`preview` makes no writes at all;
+`sync` only ever updates SQLite and writes back `YI` for lessons that are already
+billed). Billing itself stays a deliberate, manual
+`invoicing run --period N --real --no-dry-run --confirm`, run by a human who's just
+read the preview email.
+
+This is a direct response to
+[the double-billing incident](docs/POSTMORTEM-double-billing.md): that incident
+happened because the pipeline trusted its own state without a human checking it
+against what had actually changed upstream. Automating the *noticing* is safe and
+useful; automating the *deciding* is exactly what went wrong last time.
+
+**Why GitHub Actions and not an Azure Function:** an Azure Function was the first
+choice — it's the more relevant signal for the market this portfolio targets — but
+the real blocker is credentials, not compute. This pipeline's OAuth flow needs an
+interactive browser consent the first time (`InstalledAppFlow.run_local_server`),
+which a headless Function can't do; running it there means provisioning a
+already-authorized refresh token into Key Vault with managed-identity access ahead of
+time, which needs a real Azure subscription to build and test against and pushed this
+past a reasonable evening's work. GitHub Actions needed nothing new: this repo
+already runs CI there, and its encrypted secrets are enough to hold a pre-authorized
+token. If this project ever gets Azure infrastructure elsewhere, moving this specific
+job over is a reasonable follow-up, not a redesign.
+
+**Setup**, once you have a token cache already migrated to JSON (see the OAuth section
+above — any real `--real` run does this automatically) — as repository **secrets**:
+`INVOICING_OAUTH_CLIENT_SECRET_JSON` (the contents of `credentials/credentials.json`),
+`INVOICING_OAUTH_TOKEN_JSON` (the contents of `credentials/token.json`), and
+`INVOICING_SHEET_ID`; and as repository **variables**: `INVOICING_TERM_START`,
+`INVOICING_SCHEDULE_TAB`, `INVOICING_SENDER_NAME`, `INVOICING_SENDER_EMAIL`. Trigger a
+run manually from the Actions tab (`workflow_dispatch`) to test it before waiting for
+Monday.
+
 ## Incidents
 
 - [**Double-billing from a forked student identity**](docs/POSTMORTEM-double-billing.md) (2026-08-16) — a parent's contact email changing between two syncs forked a duplicate student record, and a real run billed and partly emailed 44 invoices instead of 22. Root-caused from the live database, fixed, and covered by a regression test. Full writeup, including what's still open, at the link above.

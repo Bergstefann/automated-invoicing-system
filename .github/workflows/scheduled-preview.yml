@@ -1,0 +1,50 @@
+name: Scheduled preview
+
+# Reviews the pipeline's state on a schedule and emails the operator what
+# *would* be billed. Deliberately never bills or sends an invoice — see
+# docs/POSTMORTEM-double-billing.md for why unattended billing is the
+# wrong design here. This workflow only ever runs `sync` (writes to
+# SQLite + writes YI back for already-billed lessons) and `preview`
+# (read-only), never `run --confirm`.
+
+on:
+  schedule:
+    # Weekly rather than tied to a fortnightly period boundary — periods
+    # don't align to a fixed weekday, and deploy/scheduled_preview.py
+    # itself works out whether a period has actually completed since the
+    # last run.
+    - cron: "0 8 * * MON"
+  workflow_dispatch: {}
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      - name: Write Google credentials from secrets
+        run: |
+          mkdir -p credentials
+          printf '%s' "$OAUTH_CLIENT_SECRET_JSON" > credentials/credentials.json
+          printf '%s' "$OAUTH_TOKEN_JSON" > credentials/token.json
+        env:
+          OAUTH_CLIENT_SECRET_JSON: ${{ secrets.INVOICING_OAUTH_CLIENT_SECRET_JSON }}
+          OAUTH_TOKEN_JSON: ${{ secrets.INVOICING_OAUTH_TOKEN_JSON }}
+
+      - name: Run scheduled preview
+        run: python deploy/scheduled_preview.py
+        env:
+          INVOICING_TERM_START: ${{ vars.INVOICING_TERM_START }}
+          INVOICING_SHEET_ID: ${{ secrets.INVOICING_SHEET_ID }}
+          INVOICING_SCHEDULE_TAB: ${{ vars.INVOICING_SCHEDULE_TAB }}
+          INVOICING_OAUTH_CLIENT_SECRET_FILE: credentials/credentials.json
+          INVOICING_OAUTH_TOKEN_FILE: credentials/token.json
+          INVOICING_SENDER_NAME: ${{ vars.INVOICING_SENDER_NAME }}
+          INVOICING_SENDER_EMAIL: ${{ vars.INVOICING_SENDER_EMAIL }}
