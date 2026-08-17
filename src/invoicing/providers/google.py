@@ -241,6 +241,15 @@ def _parse_blocked_schedule(
     back to. The index is built for every [name, status] pair encountered,
     even ones with a blank status, so a cell can always be resolved once a
     lesson there gets billed.
+
+    Raises `ValueError` if the same (first name, date) would resolve to two
+    different cells — i.e. two different students sharing a first name each
+    have a lesson on the same date. This system has always joined the Sheet
+    to the roster by first name alone (see `sync_schedule_into_db`), so that
+    collision is a real, structural limit, not something the write-back
+    index can silently paper over: guessing which of two cells to mark
+    `YI` for a lesson that was actually billed under a specific student
+    would misattribute the other student's cell, silently and permanently.
     """
     if not grid:
         return [], {}
@@ -268,7 +277,18 @@ def _parse_blocked_schedule(
             if not name_val:
                 continue
             status_val = row[status_col].strip().upper() if status_col < len(row) else ""
-            cell_index[(name_val.lower(), lesson_date)] = (row_index, status_col)
+            key = (name_val.lower(), lesson_date)
+            existing = cell_index.get(key)
+            if existing is not None and existing != (row_index, status_col):
+                existing_row, existing_col = existing
+                raise ValueError(
+                    f"ambiguous student reference: '{name_val}' has a lesson on "
+                    f"{lesson_date.isoformat()} in two different cells "
+                    f"({_col_letter(existing_col)}{existing_row + 1} and "
+                    f"{_col_letter(status_col)}{row_index + 1}) — two students "
+                    "sharing a first name can't be resolved from the Sheet alone."
+                )
+            cell_index[key] = (row_index, status_col)
             if not status_val:
                 continue
             lessons.append(

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from invoicing.providers.google import (
     _col_letter,
     _is_header_row,
@@ -138,3 +140,17 @@ def test_parse_blocked_schedule_index_keys_are_case_insensitive_lowercase() -> N
     _lessons, index = _parse_blocked_schedule(_one_block_grid(), year=2026)
     assert ("Aria", date(2026, 3, 2)) not in index
     assert ("aria", date(2026, 3, 2)) in index
+
+
+def test_parse_blocked_schedule_raises_on_two_same_named_students_same_date() -> None:
+    # Two different day-columns can share a header date (e.g. two lesson
+    # slots on the same day). If both have a student named "Aria" that
+    # date, the (first_name, date) index can't tell them apart — this must
+    # fail loudly rather than silently pick one cell for mark_lessons_billed
+    # to write back to on behalf of both.
+    grid = [
+        ["2/3", "", "2/3", ""],
+        ["Aria", "Y", "Aria", "YI"],
+    ]
+    with pytest.raises(ValueError, match="ambiguous student reference"):
+        _parse_blocked_schedule(grid, year=2026)
