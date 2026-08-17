@@ -160,13 +160,15 @@ erDiagram
 pytest --cov=src/invoicing --cov-report=term-missing
 ```
 
-77 tests, 80% line coverage on `src/invoicing`. Coverage is intentionally uneven: `billing.py`, `invoice_numbers.py`, `providers/base.py`, and `seed.py` sit at 100%, while `providers/google.py` sits at 46% — it is *never exercised* by the test suite, by design. A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real connection attempt, so the suite fails loudly if anything ever tried to reach the network; as it stands, nothing does.
+83 tests, 81% line coverage on `src/invoicing`. Coverage is intentionally uneven: `billing.py`, `invoice_numbers.py`, `providers/base.py`, and `seed.py` sit at 100%, while `providers/google.py` sits at 50% — the parts of it that talk to a real Google API are *never exercised* by the test suite, by design, though its pure parsing/migration logic is. A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real connection attempt, so the suite fails loudly if anything ever tried to reach the network; as it stands, nothing does.
 
 - `tests/unit/test_billing.py` — period boundary math, unbilled detection, attendance filtering, integer-cents totals
 - `tests/unit/test_idempotency.py` — re-billing produces no duplicates, a billed lesson is never re-billed
 - `tests/unit/test_invoice_numbers.py` — format, sequencing, cross-run uniqueness
 - `tests/unit/test_templates.py` — every placeholder filled, none survive, HTML escaping, real payment data never appears
-- `tests/unit/test_google_sheet_parsing.py` — the real Sheet's blocked weekly-grid layout parses correctly, independent of the API calls around it
+- `tests/unit/test_google_sheet_parsing.py` — the real Sheet's blocked weekly-grid layout parses correctly, including raising on an ambiguous same-first-name-same-date collision instead of guessing
+- `tests/unit/test_oauth_token.py` — the cached OAuth token migrates from a legacy pickle to real JSON in place, and leaves an already-migrated file untouched
+- `tests/unit/test_schema_migration.py` — opening a database created before a column existed brings it forward safely; opening an already-current one is a no-op
 - `tests/integration/test_pipeline.py` — full pipeline against fakes: billing, dry-run, re-run idempotency, partial email failure recovery (including a PDF-export failure, not just a send failure), Sheet status write-back, YI-as-already-billed sync, student identity surviving a parent email change
 - `tests/integration/test_cli.py` — the actual Typer CLI, including the dry-run/--confirm safety gate
 
@@ -224,8 +226,18 @@ Monday.
 
 ## What I'd do next
 
-- `mark_lessons_billed` (`providers/google.py:201`) resolves the Sheet cell to write back to by first name only (`ref.student_key.split()[0].lower()`) — the same class of identity-resolution shortcut as the incident above, just in the write-back direction and not yet triggered. See "Remaining risk" in the postmortem.
 - `billing_type == "Private"` gating happens at sync time rather than as a stored column, since the target schema doesn't carry it; documented in `pipeline.py`, but a real second billing type (e.g. group lessons) would need it modeled properly.
 - Lesson `duration_minutes` is hardcoded to 30 on sync, since the original sheet never recorded it.
 - GST is `$0.00`, matching the original — a real second tax jurisdiction would need this implemented for real.
 - No multi-tenancy: one `Settings`, one Sheet, one sender identity. Fine for one small business, not for a SaaS version of this.
+
+## Recent work
+
+A focused remediation pass (2026-08-16/17), prompted directly by the incident above:
+
+- Wrote up [the double-billing incident](docs/POSTMORTEM-double-billing.md) as a full postmortem — timeline, impact, root cause, diagnosis, fix, and what's still open.
+- Fixed the README claims that had drifted from the code (stale test/coverage numbers, a "not implemented" note for a method that had since been built).
+- Fixed the same identity-resolution shortcut that caused the incident, in the one place it hadn't been fixed yet: `mark_lessons_billed`'s Sheet write-back now raises a clear error on an ambiguous same-first-name collision instead of silently guessing a cell.
+- Replaced the cached OAuth token's on-disk format: it was a pickle in a file named `token.json`; it's real JSON now, with an automatic one-time migration for anyone already holding the old format.
+- Added a weekly scheduled preview (GitHub Actions) that emails what *would* be billed for human review — never bills or sends anything itself. Direct response to the incident: automating the noticing is safe, automating the deciding isn't.
+- Added a minimal schema-version migration path, so a local database created before a column existed gets brought forward safely instead of silently missing it — the exact gap that let the incident's root cause go undetected as long as it did.
