@@ -114,6 +114,7 @@ erDiagram
         int duration_minutes
         string attendance_status
         int billed_invoice_id FK "nullable"
+        bool pre_billed
     }
     BILLING_PERIODS {
         int id PK
@@ -159,13 +160,14 @@ erDiagram
 pytest --cov=src/invoicing --cov-report=term-missing
 ```
 
-52 tests, 73% line coverage on `src/invoicing`. Coverage is intentionally uneven: `billing.py`, `invoice_numbers.py`, `providers/base.py`, and `seed.py` sit at 100%, while `providers/google.py` sits at 21% — it is *never exercised* by the test suite, by design. A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real connection attempt, so the suite fails loudly if anything ever tried to reach the network; as it stands, nothing does.
+77 tests, 80% line coverage on `src/invoicing`. Coverage is intentionally uneven: `billing.py`, `invoice_numbers.py`, `providers/base.py`, and `seed.py` sit at 100%, while `providers/google.py` sits at 46% — it is *never exercised* by the test suite, by design. A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real connection attempt, so the suite fails loudly if anything ever tried to reach the network; as it stands, nothing does.
 
 - `tests/unit/test_billing.py` — period boundary math, unbilled detection, attendance filtering, integer-cents totals
 - `tests/unit/test_idempotency.py` — re-billing produces no duplicates, a billed lesson is never re-billed
 - `tests/unit/test_invoice_numbers.py` — format, sequencing, cross-run uniqueness
 - `tests/unit/test_templates.py` — every placeholder filled, none survive, HTML escaping, real payment data never appears
-- `tests/integration/test_pipeline.py` — full pipeline against fakes: billing, dry-run, re-run idempotency, partial email failure recovery, Sheet status write-back
+- `tests/unit/test_google_sheet_parsing.py` — the real Sheet's blocked weekly-grid layout parses correctly, independent of the API calls around it
+- `tests/integration/test_pipeline.py` — full pipeline against fakes: billing, dry-run, re-run idempotency, partial email failure recovery (including a PDF-export failure, not just a send failure), Sheet status write-back, YI-as-already-billed sync, student identity surviving a parent email change
 - `tests/integration/test_cli.py` — the actual Typer CLI, including the dry-run/--confirm safety gate
 
 ## Safety
