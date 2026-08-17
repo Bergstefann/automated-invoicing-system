@@ -49,6 +49,12 @@ files = ["src"]
 [[tool.mypy.overrides]]
 module = ["googleapiclient.*", "google_auth_oauthlib.*", "google.oauth2.*", "google.auth.*"]
 ignore_missing_imports = true
+# These ship real, importable source with no type annotations (no py.typed
+# marker), so mypy strict's disallow_untyped_calls flags every call into
+# them once the caller-side variable is properly typed instead of Any.
+# follow_imports = "skip" treats the whole module as Any without inspecting
+# its unannotated body, which is the standard escape hatch for this.
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

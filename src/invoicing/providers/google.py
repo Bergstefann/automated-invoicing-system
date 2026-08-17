@@ -35,9 +35,11 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Any
 
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -99,14 +101,32 @@ def _col_letter(zero_based_index: int) -> str:
     return result
 
 
-def _oauth_credentials(settings: Settings) -> Any:
+def _load_cached_token(token_file: Path) -> Credentials:
+    """Loads the cached token, migrating a legacy pickle in place if that's
+    what's found. Token files used to be written with `pickle.dump` despite
+    the documented `.json` extension; `from_authorized_user_file` expects
+    real JSON and raises `ValueError` (via `json.JSONDecodeError` or a
+    `UnicodeDecodeError` decoding pickle's binary bytes as text — both
+    `ValueError` subclasses) on the old format, which is the migration
+    trigger below.
+    """
+    try:
+        return Credentials.from_authorized_user_file(str(token_file), OAUTH_SCOPES)
+    except ValueError:
+        with open(token_file, "rb") as f:
+            creds: Credentials = pickle.load(f)
+        token_file.write_text(creds.to_json())
+        logger.info("migrated OAuth token cache from pickle to JSON at %s", token_file)
+        return creds
+
+
+def _oauth_credentials(settings: Settings) -> Credentials:
     assert settings.oauth_client_secret_file is not None
     assert settings.oauth_token_file is not None
 
-    creds = None
+    creds: Credentials | None = None
     if settings.oauth_token_file.exists():
-        with open(settings.oauth_token_file, "rb") as f:
-            creds = pickle.load(f)
+        creds = _load_cached_token(settings.oauth_token_file)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -115,8 +135,7 @@ def _oauth_credentials(settings: Settings) -> Any:
                 str(settings.oauth_client_secret_file), OAUTH_SCOPES
             )
             creds = flow.run_local_server(port=0)
-        with open(settings.oauth_token_file, "wb") as f:
-            pickle.dump(creds, f)
+        settings.oauth_token_file.write_text(creds.to_json())
     return creds
 
 
