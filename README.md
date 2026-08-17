@@ -175,9 +175,13 @@ pytest --cov=src/invoicing --cov-report=term-missing
 - `.gitignore` blocks `credentials.json`, `token.json`, `*.pickle`, `.env`, and `*.db` from ever being committed — configured before the first commit landed, not after.
 - Everything demonstrable in this repo — the seed dataset, README output, this document — is synthetic. No real student, parent, email address, or bank detail appears anywhere in the history.
 
+## Incidents
+
+- [**Double-billing from a forked student identity**](docs/POSTMORTEM-double-billing.md) (2026-08-16) — a parent's contact email changing between two syncs forked a duplicate student record, and a real run billed and partly emailed 44 invoices instead of 22. Root-caused from the live database, fixed, and covered by a regression test. Full writeup, including what's still open, at the link above.
+
 ## What I'd do next
 
-- `GoogleSheetProvider.mark_lessons_billed` currently raises `NotImplementedError` — the real Sheets write-back needs a row/column index built during `read_schedule`, which I scoped out since it's never exercised without live credentials anyway.
+- `mark_lessons_billed` (`providers/google.py:201`) resolves the Sheet cell to write back to by first name only (`ref.student_key.split()[0].lower()`) — the same class of identity-resolution shortcut as the incident above, just in the write-back direction and not yet triggered. See "Remaining risk" in the postmortem.
 - `billing_type == "Private"` gating happens at sync time rather than as a stored column, since the target schema doesn't carry it; documented in `pipeline.py`, but a real second billing type (e.g. group lessons) would need it modeled properly.
 - Lesson `duration_minutes` is hardcoded to 30 on sync, since the original sheet never recorded it.
 - GST is `$0.00`, matching the original — a real second tax jurisdiction would need this implemented for real.
