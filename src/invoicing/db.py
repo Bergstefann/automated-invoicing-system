@@ -9,6 +9,7 @@ parsed back out of a spreadsheet.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -80,6 +81,35 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 );
 """
 
+# CREATE TABLE IF NOT EXISTS only builds the *current* shape of a table that
+# doesn't exist yet — it never adds a column to a table that's already
+# there. That's exactly the gap that let an existing local .db silently
+# miss the `pre_billed` column when it was added. SQLite's built-in
+# `PRAGMA user_version` (an integer stored in the file itself, 0 by
+# default) tracks how far a given database has been brought forward;
+# MIGRATIONS lists each step in order, applied only to a database that
+# already existed below that version. A freshly created database is
+# stamped straight to SCHEMA_VERSION in `create_schema`, since its tables
+# were just built from the current SCHEMA above and have nothing to
+# migrate.
+SCHEMA_VERSION = 1
+
+
+def _add_pre_billed_column(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(lessons)")}
+    if "pre_billed" not in columns:
+        conn.execute("ALTER TABLE lessons ADD COLUMN pre_billed INTEGER NOT NULL DEFAULT 0")
+
+
+# Each step checks the actual table shape before acting, rather than
+# trusting `user_version` alone: this column was added to SCHEMA before
+# this versioning mechanism existed, so a database created in that window
+# already has it but was never stamped — a blind `ALTER TABLE ADD COLUMN`
+# would crash on "duplicate column name" for exactly that database.
+MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
+    (1, _add_pre_billed_column),
+]
+
 
 class Database:
     def __init__(self, path: str | Path) -> None:
@@ -99,8 +129,29 @@ class Database:
         self.close()
 
     def create_schema(self) -> None:
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lessons'"
+        ).fetchone()
+        already_existed = row is not None
+
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+
+        if not already_existed:
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.conn.commit()
+            return
+
+        self._migrate()
+
+    def _migrate(self) -> None:
+        current_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        for version, migrate in MIGRATIONS:
+            if version <= current_version:
+                continue
+            migrate(self.conn)
+            self.conn.execute(f"PRAGMA user_version = {version}")
+            self.conn.commit()
 
     def is_empty(self) -> bool:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM students").fetchone()
