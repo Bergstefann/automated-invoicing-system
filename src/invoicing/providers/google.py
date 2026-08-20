@@ -146,18 +146,36 @@ class GoogleSheetProvider:
     wrap downward, a header row holds one date per name-column position, and
     the rows below hold [name, status] column pairs until the next header
     row appears. `read_schedule` builds `self._cell_index`, a
-    (first_name.lower(), date) -> (row, status_col) map (both 0-based) that
-    `mark_lessons_billed` depends on to know which cell to write back to —
-    so `read_schedule` must have been called at least once in this
-    provider's lifetime before `mark_lessons_billed` can do anything.
-    `pipeline.sync_schedule_into_db` calling `read_schedule` before billing
-    (see cli.py's `run` command) guarantees that ordering.
+    (first_name.lower(), date) -> (row, status_col) map (both 0-based).
+
+    That index is keyed by name because that's all the Sheet itself has —
+    but `mark_lessons_billed` is handed `SheetLessonRef`s keyed by the
+    database's stable `student_id`, not a name (see
+    `docs/POSTMORTEM-double-billing.md`'s "remaining risk": the previous
+    version of this class re-derived a first name by splitting the
+    database's *display* name, `ref.student_key.split()[0]`, which breaks
+    silently the moment two students share a first name or a display name
+    stops looking like "First Last"). `self._identity_map`, set by
+    `set_identity_map`, is the (student_id -> first_name.lower()) mapping
+    `sync_schedule_into_db` already builds from the exact same Sheet read
+    this class produced — so `mark_lessons_billed` never reconstructs
+    anything, it only looks up a value that was captured once, verbatim, at
+    sync time.
+
+    Both `self._cell_index` and `self._identity_map` are populated by calls
+    `sync_schedule_into_db` makes (`read_schedule` then `set_identity_map`)
+    before billing, so `read_schedule` must have been called at least once
+    in this provider's lifetime — and `set_identity_map` after it — before
+    `mark_lessons_billed` can do anything. `pipeline.sync_schedule_into_db`
+    calling both before billing (see cli.py's `run` command) guarantees
+    that ordering.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._service: Any | None = None
         self._cell_index: dict[tuple[str, date], tuple[int, int]] = {}
+        self._identity_map: dict[str, str] = {}
 
     def _sheets(self) -> Any:
         if self._service is None:
@@ -212,18 +230,20 @@ class GoogleSheetProvider:
         lessons, self._cell_index = _parse_blocked_schedule(grid, year=date.today().year)
         return ScheduleSnapshot(students=students, lessons=lessons)
 
+    def set_identity_map(self, identity_map: dict[str, str]) -> None:
+        self._identity_map = identity_map
+
     def mark_lessons_billed(self, lesson_refs: list[SheetLessonRef], status: SheetStatus) -> None:
         data: list[dict[str, Any]] = []
         for ref in lesson_refs:
-            # student_key comes from the DB's full "First Last" display
-            # name; the sheet only knows first names, so match on that.
-            first_name_key = ref.student_key.split()[0].lower() if ref.student_key else ""
-            cell = self._cell_index.get((first_name_key, ref.lesson_date))
+            cell = _resolve_lesson_cell(
+                self._identity_map, self._cell_index, ref.student_id, ref.lesson_date
+            )
             if cell is None:
                 logger.warning(
-                    "no Sheet cell found for %s on %s — DB is billed, Sheet won't reflect it "
-                    "until the next sync",
-                    ref.student_key,
+                    "no Sheet cell found for student_id %s on %s — DB is billed, Sheet won't "
+                    "reflect it until the next sync",
+                    ref.student_id,
                     ref.lesson_date,
                 )
                 continue
@@ -243,6 +263,25 @@ class GoogleSheetProvider:
             spreadsheetId=self._settings.sheet_id,
             body={"valueInputOption": "RAW", "data": data},
         ).execute()
+
+
+def _resolve_lesson_cell(
+    identity_map: dict[str, str],
+    cell_index: dict[tuple[str, date], tuple[int, int]],
+    student_id: str,
+    lesson_date: date,
+) -> tuple[int, int] | None:
+    """Translates a stable `student_id` into a Sheet cell, via the exact
+    (first_name.lower() -> student_id) mapping `sync_schedule_into_db` built
+    from this same Sheet read — never by re-deriving a first name from a
+    database display name (that reconstruction was the bug: see
+    `docs/POSTMORTEM-double-billing.md`'s "remaining risk"). Returns `None`
+    if either lookup misses, which `mark_lessons_billed` treats as "can't
+    write back this run" rather than a guess."""
+    first_name_key = identity_map.get(student_id)
+    if first_name_key is None:
+        return None
+    return cell_index.get((first_name_key, lesson_date))
 
 
 def _parse_blocked_schedule(

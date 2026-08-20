@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS parents (
 
 CREATE TABLE IF NOT EXISTS students (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT,
     name       TEXT NOT NULL,
     parent_id  INTEGER NOT NULL REFERENCES parents(id),
     instrument TEXT NOT NULL,
@@ -92,13 +93,33 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 # stamped straight to SCHEMA_VERSION in `create_schema`, since its tables
 # were just built from the current SCHEMA above and have nothing to
 # migrate.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _add_pre_billed_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(lessons)")}
     if "pre_billed" not in columns:
         conn.execute("ALTER TABLE lessons ADD COLUMN pre_billed INTEGER NOT NULL DEFAULT 0")
+
+
+def _add_student_id_column(conn: sqlite3.Connection) -> None:
+    """Backfills the register id onto a database created before it existed.
+
+    Assigned from each row's existing `id` (SQLite AUTOINCREMENT never
+    reuses a rowid, so this is exactly as "issued once, never reused" as a
+    separate counter would be) in `id` order, i.e. the order students were
+    originally created — the same rule `insert_student` uses for new rows.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(students)")}
+    if "student_id" not in columns:
+        conn.execute("ALTER TABLE students ADD COLUMN student_id TEXT")
+    rows = conn.execute(
+        "SELECT id FROM students WHERE student_id IS NULL ORDER BY id"
+    ).fetchall()
+    conn.executemany(
+        "UPDATE students SET student_id = ? WHERE id = ?",
+        [(f"S-{row[0]:04d}", row[0]) for row in rows],
+    )
 
 
 # Each step checks the actual table shape before acting, rather than
@@ -108,6 +129,7 @@ def _add_pre_billed_column(conn: sqlite3.Connection) -> None:
 # would crash on "duplicate column name" for exactly that database.
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _add_pre_billed_column),
+    (2, _add_student_id_column),
 ]
 
 
@@ -180,6 +202,10 @@ class Database:
 
     # ── students ─────────────────────────────────────────────────────────
     def insert_student(self, student: Student) -> Student:
+        """Assigns the register id here, from the new row's own primary key
+        — never from `student.student_id` on the way in, and never from
+        anything about the student's name or contact details. This is the
+        one place a student_id is ever minted."""
         cur = self.conn.execute(
             "INSERT INTO students (name, parent_id, instrument, rate_cents, school, active) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -192,8 +218,14 @@ class Database:
                 int(student.active),
             ),
         )
+        new_id = cur.lastrowid
+        assert new_id is not None
+        student_id = f"S-{new_id:04d}"
+        self.conn.execute(
+            "UPDATE students SET student_id = ? WHERE id = ?", (student_id, new_id)
+        )
         self.conn.commit()
-        return student.model_copy(update={"id": cur.lastrowid})
+        return student.model_copy(update={"id": new_id, "student_id": student_id})
 
     def get_student(self, student_id: int) -> Student:
         row = self.conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
@@ -431,6 +463,7 @@ def _parent_from_row(row: sqlite3.Row) -> Parent:
 def _student_from_row(row: sqlite3.Row) -> Student:
     return Student(
         id=row["id"],
+        student_id=row["student_id"],
         name=row["name"],
         parent_id=row["parent_id"],
         instrument=row["instrument"],

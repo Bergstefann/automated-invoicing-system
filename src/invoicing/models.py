@@ -56,6 +56,12 @@ class Parent(Model):
 
 class Student(Model):
     id: int | None = None
+    # Sequential, zero-padded, prefixed register id ("S-0001"), assigned once
+    # by Database.insert_student the first time a student appears and never
+    # reassigned — see docs/SCHEDULE-SCHEMA.md. None only for a Student that
+    # hasn't been persisted yet (e.g. built in-memory for a pure computation
+    # like compute_totals); every row read back from the database has one.
+    student_id: str | None = None
     name: str
     parent_id: int
     instrument: str
