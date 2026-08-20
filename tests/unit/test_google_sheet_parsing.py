@@ -24,6 +24,7 @@ from invoicing.providers.google import (
     _is_header_row,
     _parse_blocked_schedule,
     _parse_date_cell,
+    _resolve_lesson_cell,
 )
 
 
@@ -154,3 +155,26 @@ def test_parse_blocked_schedule_raises_on_two_same_named_students_same_date() ->
     ]
     with pytest.raises(ValueError, match="ambiguous student reference"):
         _parse_blocked_schedule(grid, year=2026)
+
+
+def test_resolve_lesson_cell_uses_the_identity_map_not_a_derived_name() -> None:
+    # Two different students share a first name in the Sheet, but the
+    # identity map (built once, at sync time, from the exact same read)
+    # sends each stable student_id to the right one — nothing here is
+    # reconstructed from a display name.
+    identity_map = {"S-0001": "aria", "S-0002": "dax"}
+    cell_index = {("aria", date(2026, 3, 2)): (1, 1), ("dax", date(2026, 3, 2)): (2, 1)}
+
+    assert _resolve_lesson_cell(identity_map, cell_index, "S-0001", date(2026, 3, 2)) == (1, 1)
+    assert _resolve_lesson_cell(identity_map, cell_index, "S-0002", date(2026, 3, 2)) == (2, 1)
+
+
+def test_resolve_lesson_cell_returns_none_for_an_unknown_student_id() -> None:
+    assert _resolve_lesson_cell({}, {}, "S-0099", date(2026, 3, 2)) is None
+
+
+def test_resolve_lesson_cell_returns_none_when_the_identity_maps_to_no_cell_that_date() -> None:
+    # The student is known, but has no lesson (and so no cell) on this date.
+    identity_map = {"S-0001": "aria"}
+    cell_index = {("aria", date(2026, 3, 2)): (1, 1)}
+    assert _resolve_lesson_cell(identity_map, cell_index, "S-0001", date(2026, 3, 9)) is None

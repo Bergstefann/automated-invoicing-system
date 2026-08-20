@@ -42,6 +42,63 @@ def _write_pre_pre_billed_lessons_table(db_path: Path) -> None:
     raw.close()
 
 
+def _write_pre_student_id_students_table(db_path: Path) -> None:
+    """Builds a `students` table shaped like it was before the register id
+    column existed, with rows already in it, to exercise the backfill."""
+    raw = sqlite3.connect(db_path)
+    raw.executescript(
+        """
+        CREATE TABLE parents (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            name  TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE students (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            parent_id  INTEGER NOT NULL REFERENCES parents(id),
+            instrument TEXT NOT NULL,
+            rate_cents INTEGER NOT NULL,
+            school     TEXT NOT NULL,
+            active     INTEGER NOT NULL DEFAULT 1,
+            UNIQUE (name, parent_id)
+        );
+        CREATE TABLE lessons (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id         INTEGER NOT NULL,
+            lesson_date        TEXT NOT NULL,
+            duration_minutes   INTEGER NOT NULL,
+            attendance_status  TEXT NOT NULL,
+            billed_invoice_id  INTEGER,
+            pre_billed         INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (student_id, lesson_date)
+        );
+        """
+    )
+    raw.execute("INSERT INTO parents (id, name, email) VALUES (1, 'Jordan', 'jordan@example.com')")
+    raw.execute(
+        "INSERT INTO students (id, name, parent_id, instrument, rate_cents, school) "
+        "VALUES (5, 'Riley Example', 1, 'Piano', 4000, 'Example School')"
+    )
+    raw.execute("PRAGMA user_version = 1")
+    raw.commit()
+    raw.close()
+
+
+def test_opening_a_pre_student_id_database_backfills_it_from_the_row_id(tmp_path: Path) -> None:
+    db_path = tmp_path / "no-student-id.db"
+    _write_pre_student_id_students_table(db_path)
+
+    db = Database(db_path)
+    try:
+        version = db.conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == SCHEMA_VERSION
+        student = db.get_student(5)
+        assert student.student_id == "S-0005"
+    finally:
+        db.close()
+
+
 def test_opening_an_old_schema_database_migrates_it_forward(tmp_path: Path) -> None:
     db_path = tmp_path / "old.db"
     _write_pre_pre_billed_lessons_table(db_path)

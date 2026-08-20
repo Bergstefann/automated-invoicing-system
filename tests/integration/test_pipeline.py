@@ -323,3 +323,45 @@ def test_sync_does_not_fork_a_new_student_when_the_parents_email_changes(db: Dat
 
     _, second_billed = bill_period(db, docs, sheet, term_start=TERM_START, period_number=1, now=NOW)
     assert len(second_billed) == 0  # nothing re-billed
+
+
+def test_sync_builds_an_identity_map_keyed_by_the_stable_student_id(db: Database) -> None:
+    """The mapping handed to the sheet provider (for write-back — see
+    providers/google.py's `set_identity_map`) must be keyed by the
+    database's stable `student_id`, never by anything derived from a
+    display name. Two students sharing a first name in the Sheet — the
+    scenario docs/POSTMORTEM-double-billing.md names as the "remaining
+    risk" — must resolve to two distinct entries, not collide into one."""
+    snapshot = ScheduleSnapshot(
+        students=[
+            SheetStudentRecord(
+                first_name="Aria",
+                last_name="Smith",
+                billing_type="Private",
+                parent_name="Smith Parent",
+                parent_email="smith@example.com",
+                rate_cents=4000,
+            ),
+            SheetStudentRecord(
+                first_name="Dax",
+                last_name="Jones",
+                billing_type="Private",
+                parent_name="Jones Parent",
+                parent_email="jones@example.com",
+                rate_cents=4500,
+            ),
+        ],
+        lessons=[],
+    )
+    sheet = FakeSheetProvider(snapshot=snapshot)
+
+    sync_schedule_into_db(db, sheet)
+
+    students = {s.name: s for s in db.list_students()}
+    aria, dax = students["Aria Smith"], students["Dax Jones"]
+    assert aria.student_id is not None and dax.student_id is not None
+    assert aria.student_id != dax.student_id
+    assert sheet.identity_map == {
+        aria.student_id: "aria",
+        dax.student_id: "dax",
+    }

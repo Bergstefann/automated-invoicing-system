@@ -19,8 +19,17 @@ from invoicing.models import SheetStatus
 
 
 class SheetStudentRecord(BaseModel):
-    """One row of the original 'Student Config' tab."""
+    """One row of the original 'Student Config' tab.
 
+    `student_id` is only ever populated by a source that actually has a
+    register id to give — the schema-contract workbook (see
+    `invoicing.workbook`). The live Google Sheet's Student Config tab has no
+    such column, so `GoogleSheetProvider` always leaves this `None`; that
+    source's identity is resolved downstream, in the database (see
+    `docs/SCHEDULE-SCHEMA.md`).
+    """
+
+    student_id: str | None = None
     first_name: str
     last_name: str
     billing_type: str
@@ -30,8 +39,12 @@ class SheetStudentRecord(BaseModel):
 
 
 class SheetLessonRecord(BaseModel):
-    """One [Student Name][Status] cell pair from the schedule grid."""
+    """One lesson. `student_id` is populated by contract-validated sources
+    (the workbook); sources with no register of their own, like the live
+    Sheet's blocked grid, leave it `None` and are joined to a roster by
+    `student_first_name` instead — see `SheetStudentRecord`."""
 
+    student_id: str | None = None
     student_first_name: str
     lesson_date: date
     status: str
@@ -48,15 +61,30 @@ class SheetLessonRef(BaseModel):
     Deliberately identity-based (student + date) rather than row/column
     indices: row/column bookkeeping is an internal detail of whichever
     SheetProvider implementation actually talks to the grid, not something
-    the pipeline should have to carry around.
+    the pipeline should have to carry around. Keyed on the database's stable
+    `student_id` — never on a display name — for exactly the reason
+    `docs/POSTMORTEM-double-billing.md` names as its one remaining open
+    risk: a name is mutable and reconstructable-wrong, an issued-once
+    register id isn't.
     """
 
-    student_key: str
+    student_id: str
     lesson_date: date
 
 
 class SheetProvider(Protocol):
     def read_schedule(self) -> ScheduleSnapshot: ...
+
+    def set_identity_map(self, identity_map: dict[str, str]) -> None:
+        """Tells the provider how each stable `student_id` maps back to
+        whatever identity its own source natively uses (for the Sheet: a
+        lowercased first name), so `mark_lessons_billed` can resolve a
+        write-back target without ever re-deriving that mapping from a
+        display name. Called once, after `read_schedule`, by
+        `sync_schedule_into_db` — the one place that already does the
+        canonical join from source identity to `student_id`.
+        """
+        ...
 
     def mark_lessons_billed(
         self, lesson_refs: list[SheetLessonRef], status: SheetStatus

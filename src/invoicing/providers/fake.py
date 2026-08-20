@@ -22,9 +22,13 @@ from invoicing.providers.base import (
 class FakeSheetProvider:
     snapshot: ScheduleSnapshot
     marked_billed: list[tuple[SheetLessonRef, SheetStatus]] = field(default_factory=list)
+    identity_map: dict[str, str] = field(default_factory=dict)
 
     def read_schedule(self) -> ScheduleSnapshot:
         return self.snapshot
+
+    def set_identity_map(self, identity_map: dict[str, str]) -> None:
+        self.identity_map = identity_map
 
     def mark_lessons_billed(self, lesson_refs: list[SheetLessonRef], status: SheetStatus) -> None:
         for ref in lesson_refs:

@@ -71,6 +71,21 @@ This rebuild makes SQLite the source of truth. `lessons.billed_invoice_id` is a 
 
 Everything that talks to Google sits behind three Protocols: `SheetProvider`, `DocProvider`, `EmailProvider`. The pipeline depends on those exclusively and never imports the concrete Google classes. Every test, and `--demo` mode, wires up in-memory fakes instead. That's what makes the whole thing runnable and testable with zero credentials and zero network access.
 
+### Schedule schema contract and student identity
+
+[The double-billing incident](docs/POSTMORTEM-double-billing.md) happened because student identity was never anything but a name, looked up transitively through a parent's contact email — a field that legitimately changes. [`docs/SCHEDULE-SCHEMA.md`](docs/SCHEDULE-SCHEMA.md) is the structural fix: a versioned schema contract (`invoicing.schedule_contract`) that makes `student_id` — text, `S-0001` format, issued once, never derived from name or email — the only identity a student or a scheduled lesson ever has. Name, rate, and contact details are attributes, explicitly not identity, and can change freely without ever forking a second student.
+
+The contract is validated two ways:
+
+- **`templates/lesson_schedule.xlsx`** — the contract as a real, usable workbook: a Legend sheet (schema version, column glossary), a Students sheet (the identity register), and a Schedule sheet (one row per lesson, `student_id` validated against the register via dropdown, not free text). It's simultaneously the spec, a fillable template, and a test fixture — `tests/unit/test_workbook.py` loads this exact committed file through the real loader, so the doc and the code can't silently drift apart. Read via `invoicing.workbook.load_schedule_workbook`.
+- **The live Google Sheet, unchanged in layout** — `GoogleSheetProvider` still parses its native wrapped weekly-block grid the way it always has (that's a property of the live Sheet, out of scope for this work), then `sync_schedule_into_db` resolves each Sheet-native first name to the database's `student_id` once, at sync time. From there on — critically, including the Sheet write-back that `mark_lessons_billed` performs after billing — `student_id` is what moves, never a re-derived name. That write-back path used to reconstruct a first name by splitting the database's display name (`student.name.split()[0]`), which is exactly the kind of fragile, mutable-field lookup that caused the original incident; it's now keyed by `student_id` throughout, via an identity map built once from the same join that creates the identity.
+
+| Legend | Students (identity register) | Schedule (one row per lesson) |
+|---|---|---|
+| ![Legend sheet](docs/images/schedule-workbook-legend.png) | ![Students sheet](docs/images/schedule-workbook-students.png) | ![Schedule sheet](docs/images/schedule-workbook-schedule.png) |
+
+The workbook loader is fully implemented and tested but not yet wired into the CLI as a live source — see ["What I'd do next"](#what-id-do-next).
+
 ```mermaid
 flowchart LR
     Sheet[("Google Sheet\n(human view)")] -- sync --> DB[("SQLite\n(source of truth)")]
@@ -114,6 +129,7 @@ erDiagram
     }
     STUDENTS {
         int id PK
+        string student_id "S-0001 format, issued once"
         string name
         int parent_id FK
         string instrument
@@ -174,9 +190,9 @@ erDiagram
 pytest --cov=src/invoicing --cov-report=term-missing
 ```
 
-83 tests, 81% line coverage on `src/invoicing`.
+120 tests, 84% line coverage on `src/invoicing`.
 
-Coverage is intentionally uneven. `billing.py`, `invoice_numbers.py`, `providers/base.py`, and `seed.py` sit at 100%. `providers/google.py` sits at 50%, because the parts that talk to a real Google API are never exercised by the suite, by design. Its pure parsing and migration logic is.
+Coverage is intentionally uneven. `billing.py`, `invoice_numbers.py`, `providers/base.py`, `seed.py`, and `schedule_contract.py` sit at 100%; `workbook.py` at 94%. `providers/google.py` sits at 52%, because the parts that talk to a real Google API are never exercised by the suite, by design. Its pure parsing, write-back identity resolution, and migration logic all are.
 
 A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real connection attempt, so the suite fails loudly if anything ever tried to reach the network. Nothing does.
 
@@ -184,10 +200,12 @@ A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real conne
 - `tests/unit/test_idempotency.py` - re-billing produces no duplicates, a billed lesson is never re-billed
 - `tests/unit/test_invoice_numbers.py` - format, sequencing, cross-run uniqueness
 - `tests/unit/test_templates.py` - every placeholder filled, none survive, HTML escaping, real payment data never appears
-- `tests/unit/test_google_sheet_parsing.py` - the real Sheet's blocked weekly-grid layout parses correctly, and raises on an ambiguous same-first-name collision instead of guessing
+- `tests/unit/test_google_sheet_parsing.py` - the real Sheet's blocked weekly-grid layout parses correctly, raises on an ambiguous same-first-name collision instead of guessing, and Sheet write-back resolves a cell from a `student_id` via the identity map, never by re-deriving a name
 - `tests/unit/test_oauth_token.py` - the cached OAuth token migrates from legacy pickle to JSON in place, and leaves an already-migrated file untouched
-- `tests/unit/test_schema_migration.py` - opening a database created before a column existed brings it forward safely; opening a current one is a no-op
-- `tests/integration/test_pipeline.py` - full pipeline against fakes: billing, dry-run, re-run idempotency, partial email failure recovery, Sheet write-back, sync of already-billed lessons, student identity surviving a parent email change
+- `tests/unit/test_schema_migration.py` - opening a database created before a column existed brings it forward safely (including the `student_id` backfill); opening a current one is a no-op
+- `tests/unit/test_schedule_contract.py` - every contract violation raises a specific, row-numbered error: missing/blank columns, bad types, duplicate or unresolvable `student_id`, unsupported schema version, an attribute change resolving to one student not two
+- `tests/unit/test_workbook.py` - the `.xlsx` loader against malformed fixture workbooks built in-memory (missing sheet, missing column, bad data), column-order independence, and the real committed `templates/lesson_schedule.xlsx` loading cleanly
+- `tests/integration/test_pipeline.py` - full pipeline against fakes: billing, dry-run, re-run idempotency, partial email failure recovery, Sheet write-back, sync of already-billed lessons, student identity surviving a parent email change, the sync-time identity map keyed by `student_id` even when two students share a first name
 - `tests/integration/test_cli.py` - the actual Typer CLI, including the dry-run and `--confirm` safety gate
 
 ## Safety
@@ -215,8 +233,18 @@ This is a direct response to [the double-billing incident](docs/POSTMORTEM-doubl
 - Lesson `duration_minutes` is hardcoded to 30 on sync, since the original sheet never recorded it.
 - GST is `$0.00`, matching the original. A real second tax jurisdiction would need it implemented.
 - No multi-tenancy: one `Settings`, one Sheet, one sender identity. Fine for one small business, not for a SaaS version.
+- The `.xlsx` schema-contract workbook (see [`docs/SCHEDULE-SCHEMA.md`](docs/SCHEDULE-SCHEMA.md)) isn't wired into the CLI as a live source yet — `invoicing.workbook` is fully implemented and tested, but there's no `--xlsx-path` flag or equivalent to point `sync`/`run` at a workbook file. The natural next step, not a design gap.
+- `Database.get_or_create_parent` still matches a parent by email — the same kind of mutable-field lookup that caused the original double-billing incident, one level up the chain from students. It hasn't forked a duplicate student since the original fix, but the email-keyed lookup itself is still there.
 
 ## Recent work
+
+A schema-contract and identity pass (2026-08-21), completing the structural fix the incident called for:
+
+- Added [`docs/SCHEDULE-SCHEMA.md`](docs/SCHEDULE-SCHEMA.md): a versioned schedule schema contract making `student_id` (text, `S-0001` format, issued once) the only identity a student or lesson ever has, with name/rate/contact demoted to attributes.
+- Added `templates/lesson_schedule.xlsx` plus the code to validate any source against it (`invoicing.schedule_contract`, `invoicing.workbook`) — including tests against deliberately malformed fixture workbooks.
+- Closed the postmortem's one previously-flagged, unfired remaining risk: Sheet write-back (`mark_lessons_billed`) now resolves a cell by `student_id`, via an identity map built once at sync time, instead of re-deriving a first name by splitting a display string.
+- Added a `student_id` column to the database, minted once per student and backfilled for existing databases via the schema-migration path.
+- Test count: 83 → 120. Coverage: 81% → 84%.
 
 A focused remediation pass (2026-08-16/17), prompted by the incident above:
 

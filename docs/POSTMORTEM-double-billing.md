@@ -151,3 +151,46 @@ direction instead of the sync direction. It has not yet fired, because no two
 students in the live roster currently share a first name — but it is the same class
 of bug, latent rather than fixed, and is tracked as a follow-up rather than closed
 here.
+
+---
+
+## Follow-up (2026-08-21): a schema contract closes the write-back risk above
+
+**This section is later, structural work, added five days after the incident and the fix
+above. It was not part of the original fix, and none of it existed at the time this
+postmortem was first written.** Everything above this line is the unedited original
+record of what happened and what was done about it then.
+
+This follow-up closes the specific risk this postmortem names in "Remaining risk": as of
+this session, `mark_lessons_billed` no longer resolves a Sheet cell by
+`ref.student_key.split()[0].lower()`. It resolves by the database's stable `student_id`,
+via an identity map (`student_id -> first_name`) that `sync_schedule_into_db` builds once,
+at sync time, from the same roster join that already creates that identity — not by
+re-deriving a first name from a display string on every write-back call. Two students
+sharing a first name, which was the specific unfired failure mode named above, now
+resolve to two distinct entries instead of colliding.
+
+The broader structural change this session did is a versioned lesson-schedule schema
+contract (`docs/SCHEDULE-SCHEMA.md`), backed by a template workbook
+(`templates/lesson_schedule.xlsx`) and validation code
+(`invoicing.schedule_contract`, `invoicing.workbook`). Its core move is making
+`student_id` — text, `S-0001` format, issued once, never derived from a name or an email
+— the only identity a student or a scheduled lesson has anywhere in the contract; name,
+rate, and contact details are explicitly attributes, not identity, and can change freely
+without ever forking a second student. The database gained a real `student_id` column on
+the same principle, minted once per student at insert time and backfilled for existing
+databases. Where the original fix (above) made `name` the one lookup key for students in
+the database, this follow-up replaces that name-based key with an immutable id
+everywhere it's practical to do so — including, now, the write-back direction this
+postmortem had left open.
+
+**This does not close every identity risk in the system, and shouldn't be read as if it
+does.** `Database.get_or_create_parent` still matches a parent by email — the same shape
+of mutable-field lookup that forked the parent row which forked the student row in this
+incident's own timeline, one level up the chain. It has not forked a duplicate student
+since the original fix landed, because the student lookup no longer depends on which
+parent row resolved — but the email-keyed parent lookup itself is unchanged and
+unaddressed by this follow-up. `GoogleSheetProvider`'s other heuristics (first-name-only
+sync-time matching against the live Sheet's roster, silent skip on an unmatched name,
+year inferred rather than read from the sheet) are also unchanged; see
+`docs/SCHEDULE-SCHEMA.md`'s "Known limitations" for the full, current list.

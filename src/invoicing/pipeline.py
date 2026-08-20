@@ -66,6 +66,12 @@ def sync_schedule_into_db(db: Database, sheet: SheetProvider) -> int:
     snapshot = sheet.read_schedule()
 
     student_ids: dict[str, int] = {}
+    # first_name.lower() -> student_id, handed to the sheet provider so
+    # mark_lessons_billed can resolve a write-back cell from the stable
+    # student_id on a SheetLessonRef without ever re-deriving a first name
+    # from a display name (see providers/google.py's class docstring, and
+    # docs/POSTMORTEM-double-billing.md's "remaining risk").
+    identity_map: dict[str, str] = {}
     for record in snapshot.students:
         if record.billing_type != BILLABLE_TYPE:
             continue
@@ -80,7 +86,11 @@ def sync_schedule_into_db(db: Database, sheet: SheetProvider) -> int:
             school="Unspecified",
         )
         assert student.id is not None
+        assert student.student_id is not None
         student_ids[record.first_name.lower()] = student.id
+        identity_map[student.student_id] = record.first_name.lower()
+
+    sheet.set_identity_map(identity_map)
 
     synced = 0
     for lesson_record in snapshot.lessons:
@@ -236,8 +246,9 @@ def bill_period(
         db.mark_lessons_billed(lesson_ids, invoice.id)
 
         created.append(invoice)
+        assert student.student_id is not None
         sheet_refs.extend(
-            SheetLessonRef(student_key=student.name, lesson_date=lesson.lesson_date)
+            SheetLessonRef(student_id=student.student_id, lesson_date=lesson.lesson_date)
             for lesson in student_lessons
         )
 
