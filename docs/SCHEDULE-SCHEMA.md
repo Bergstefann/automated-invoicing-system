@@ -75,7 +75,7 @@ One cell matters to the parser: `B2`, the schema version (see
 editing the workbook, covering what's safe to edit, a column glossary, and
 one example row. `invoicing.workbook` doesn't read any of it.
 
-### Students — the identity register
+### Students: the identity register
 
 One row per student. Column order in the sheet doesn't matter; the loader
 reads by header name.
@@ -92,7 +92,7 @@ A blank/missing value in any required column, a `rate_cents` that isn't a
 non-negative integer, or a `student_id` repeated across two rows are all
 contract violations (see below).
 
-### Schedule — one row per lesson
+### Schedule: one row per lesson
 
 | Column | Type | Required | Allowed values |
 |---|---|---|---|
