@@ -173,6 +173,8 @@ erDiagram
     }
 ```
 
+![Invoicing data model — Parents, Students, Lessons, Billing periods, Invoices, and Invoice lines, with Invoices as the aggregate root joining Students, Parents, and Billing periods](docs/images/invoicing-data-model-er.png)
+
 ## CLI reference
 
 | Command | Flags | Does |

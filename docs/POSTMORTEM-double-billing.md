@@ -13,7 +13,33 @@ billed twice. The cause was that 22 real students had silently been duplicated i
 distinct, currently-unbilled lesson it found, which by then included two full copies
 of the roster.
 
+The fork at a glance:
+
+```mermaid
+sequenceDiagram
+    participant Sheet as Google Sheet
+    participant P as get_or_create_parent
+    participant S as get_or_create_student
+    participant DB as invoicing.db
+    participant Bill as bill_period
+
+    Note over Sheet: placeholder emails (Name@gmail.com)
+    Sheet->>P: lookup parent by email -> no row (step 1)
+    P->>DB: create parents[1], students[1] (23 rows)
+    Note over Sheet: emails changed to +alias@gmail.com
+    Sheet->>P: lookup parent by email -> no row (step 3)
+    P->>DB: create parent[2] for the same real person
+    P->>S: lookup student by (name, parent_id=2) -> no row
+    S->>DB: create student[2] + fresh, unbilled lesson rows
+    Bill->>DB: bill every currently-unbilled lesson (both copies)
+    Bill->>DB: 44 invoices, one identical issued_at
+```
+
+![Sequence diagram of the identity fork — a parent's email change forks a duplicate parent and student row, which bill_period then bills as 44 invoices sharing one issued_at timestamp](images/double-billing-identity-fork-sequence.png)
+
 ## Timeline
+
+![Six-step incident timeline — from the initial sync through the identity fork, the period-3 billing run that produced 44 invoices, the stalled email batch, and the preview/status mismatch that triggered the investigation](images/double-billing-incident-timeline.png)
 
 1. An earlier `sync --real` ran while the source Google Sheet's "Student Config" tab
    held placeholder parent contact addresses in the form `Name@gmail.com`. This
