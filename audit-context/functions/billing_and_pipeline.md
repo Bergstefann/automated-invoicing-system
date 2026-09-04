@@ -772,8 +772,12 @@ html_body = render_invoice_email(...)
 # L327-L337
 try:
     pdf_bytes = docs.export_pdf(invoice.doc_url)
-    email.send(to=parent.email, subject=..., html_body=html_body,
-               attachment=EmailAttachment(filename=pdf_filename, content=pdf_bytes))
+    email.send(
+        to=parent.email,
+        subject=...,
+        html_body=html_body,
+        attachment=EmailAttachment(filename=pdf_filename, content=pdf_bytes),
+    )
 except Exception:
     result.failed.append(invoice.invoice_number)
     continue

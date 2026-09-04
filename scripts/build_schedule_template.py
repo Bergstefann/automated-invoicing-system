@@ -102,17 +102,29 @@ def _build_legend_sheet(wb: Workbook) -> None:
     legend["A9"] = "Column reference"
     legend["A9"].font = Font(bold=True)
     glossary = [
-        ("Students.student_id", "Identity. Text, format \"S-0001\". Issued once, "
-         "the first time a student appears. Never reused, never edited afterward."),
-        ("Students.name / rate_cents / parent_name / parent_email", "Attributes, not "
-         "identity — these can change freely across edits without ever creating a "
-         "second student. rate_cents is whole cents (4000 = $40.00)."),
-        ("Schedule.student_id", "Must match a student_id already in the Students "
-         "sheet — pick it from the dropdown, don't type it freehand."),
+        (
+            "Students.student_id",
+            'Identity. Text, format "S-0001". Issued once, '
+            "the first time a student appears. Never reused, never edited afterward.",
+        ),
+        (
+            "Students.name / rate_cents / parent_name / parent_email",
+            "Attributes, not "
+            "identity — these can change freely across edits without ever creating a "
+            "second student. rate_cents is whole cents (4000 = $40.00).",
+        ),
+        (
+            "Schedule.student_id",
+            "Must match a student_id already in the Students "
+            "sheet — pick it from the dropdown, don't type it freehand.",
+        ),
         ("Schedule.lesson_date / start_time", "Real date / time values, not text."),
         ("Schedule.duration_minutes", "Positive whole number of minutes."),
-        ("Schedule.status", "Y = billable, not yet invoiced. YI = already invoiced. "
-         "N = not billable (e.g. cancelled)."),
+        (
+            "Schedule.status",
+            "Y = billable, not yet invoiced. YI = already invoiced. "
+            "N = not billable (e.g. cancelled).",
+        ),
     ]
     for offset, (column, meaning) in enumerate(glossary):
         row = 10 + offset
