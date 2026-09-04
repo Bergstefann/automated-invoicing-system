@@ -22,7 +22,19 @@ from invoicing.billing import period_number_for_date
 from invoicing.config import Settings
 from invoicing.db import Database
 from invoicing.pipeline import InvoicePreviewLine, preview_period, sync_schedule_into_db
-from invoicing.providers.google import GoogleEmailProvider, GoogleSheetProvider
+from invoicing.providers.google import (
+    EMAIL_SCOPES,
+    SHEETS_SCOPES,
+    GoogleEmailProvider,
+    GoogleSheetProvider,
+)
+
+# This job only reads the Sheet and sends one preview email — never touches
+# Docs/Drive — so the token it mints (and the GitHub secret that holds it)
+# should carry only these two scopes, not the full set `cli.py`'s `run
+# --real` requests. Both providers below must request this same combined
+# set since they share one cached token file.
+SCOPES = SHEETS_SCOPES + EMAIL_SCOPES
 
 
 def _fmt_cents(cents: int) -> str:
@@ -68,7 +80,7 @@ def main() -> None:
     settings = Settings.from_env()
     settings.require_sheet_config()
 
-    sheet = GoogleSheetProvider(settings)
+    sheet = GoogleSheetProvider(settings, scopes=SCOPES)
     with Database(settings.db_path) as db:
         sync_schedule_into_db(db, sheet)
 
@@ -81,7 +93,7 @@ def main() -> None:
     else:
         subject, body = _report_for_completed_period(settings, current_period - 1)
 
-    email = GoogleEmailProvider(settings)
+    email = GoogleEmailProvider(settings, scopes=SCOPES)
     email.send(to=settings.sender_email, subject=subject, html_body=body)
 
 

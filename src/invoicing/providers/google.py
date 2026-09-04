@@ -184,15 +184,16 @@ class GoogleSheetProvider:
     that ordering.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else SHEETS_SCOPES
         self._service: Any | None = None
         self._cell_index: dict[tuple[str, date], tuple[int, int]] = {}
         self._identity_map: dict[str, str] = {}
 
     def _sheets(self) -> Any:
         if self._service is None:
-            creds = _oauth_credentials(self._settings, SHEETS_SCOPES)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._service = build("sheets", "v4", credentials=creds).spreadsheets()
         return self._service
 
@@ -374,14 +375,15 @@ def _parse_blocked_schedule(
 class GoogleDocProvider:
     """Wraps Docs + Drive. Auth is the shared OAuth installed-app flow."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else DOCS_DRIVE_SCOPES
         self._docs: Any | None = None
         self._drive: Any | None = None
 
     def _services(self) -> tuple[Any, Any]:
         if self._docs is None or self._drive is None:
-            creds = _oauth_credentials(self._settings, DOCS_DRIVE_SCOPES)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._docs = build("docs", "v1", credentials=creds)
             self._drive = build("drive", "v3", credentials=creds)
         return self._docs, self._drive
@@ -437,13 +439,14 @@ class GoogleDocProvider:
 class GoogleEmailProvider:
     """Wraps Gmail. Auth is the same shared OAuth installed-app flow."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else EMAIL_SCOPES
         self._gmail: Any | None = None
 
     def _service(self) -> Any:
         if self._gmail is None:
-            creds = _oauth_credentials(self._settings, EMAIL_SCOPES)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._gmail = build("gmail", "v1", credentials=creds)
         return self._gmail
 

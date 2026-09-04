@@ -20,7 +20,12 @@ from invoicing.db import Database
 from invoicing.pipeline import preview_period, run_period, sync_schedule_into_db
 from invoicing.providers.base import DocProvider, EmailProvider, ScheduleSnapshot, SheetProvider
 from invoicing.providers.fake import FakeDocProvider, FakeEmailProvider, FakeSheetProvider
-from invoicing.providers.google import GoogleDocProvider, GoogleEmailProvider, GoogleSheetProvider
+from invoicing.providers.google import (
+    OAUTH_SCOPES,
+    GoogleDocProvider,
+    GoogleEmailProvider,
+    GoogleSheetProvider,
+)
 from invoicing.seed import seed_database
 
 DEFAULT_MESSAGE = (
@@ -73,7 +78,16 @@ def _build_providers(
         return sheet, FakeDocProvider(), FakeEmailProvider()
 
     settings.require_google_config()
-    return GoogleSheetProvider(settings), GoogleDocProvider(settings), GoogleEmailProvider(settings)
+    # All three share one cached token file (see providers/google.py's module
+    # docstring), so they must all request the same scope set up front —
+    # otherwise whichever provider is used second silently gets a token
+    # that's insufficiently scoped for it.
+    scopes = OAUTH_SCOPES
+    return (
+        GoogleSheetProvider(settings, scopes=scopes),
+        GoogleDocProvider(settings, scopes=scopes),
+        GoogleEmailProvider(settings, scopes=scopes),
+    )
 
 
 def _fmt_cents(cents: int) -> str:
