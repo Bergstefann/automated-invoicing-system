@@ -147,7 +147,14 @@ def _oauth_credentials(settings: Settings, scopes: list[str]) -> Credentials:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(settings.oauth_client_secret_file), scopes
             )
-            creds = flow.run_local_server(port=0)
+            # Fixed port + explicit IPv4 host: a random port (port=0) plus
+            # the library's default host="localhost" leaves the bind address
+            # ambiguous (IPv4 vs IPv6) on Windows, which some local security
+            # software also probes right after the socket opens -- that can
+            # satisfy the server's single-request handler before the real
+            # browser callback arrives, so the terminal returns immediately
+            # and the browser then hits a dead socket ("Unable to connect").
+            creds = flow.run_local_server(host="127.0.0.1", port=8765)
         settings.oauth_token_file.write_text(creds.to_json())
     return creds
 
