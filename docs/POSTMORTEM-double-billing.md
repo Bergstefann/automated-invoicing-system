@@ -15,26 +15,6 @@ of the roster.
 
 The fork at a glance:
 
-```mermaid
-sequenceDiagram
-    participant Sheet as Google Sheet
-    participant P as get_or_create_parent
-    participant S as get_or_create_student
-    participant DB as invoicing.db
-    participant Bill as bill_period
-
-    Note over Sheet: placeholder emails (Name@gmail.com)
-    Sheet->>P: lookup parent by email -> no row (step 1)
-    P->>DB: create parents[1], students[1] (23 rows)
-    Note over Sheet: emails changed to +alias@gmail.com
-    Sheet->>P: lookup parent by email -> no row (step 3)
-    P->>DB: create parent[2] for the same real person
-    P->>S: lookup student by (name, parent_id=2) -> no row
-    S->>DB: create student[2] + fresh, unbilled lesson rows
-    Bill->>DB: bill every currently-unbilled lesson (both copies)
-    Bill->>DB: 44 invoices, one identical issued_at
-```
-
 ![Sequence diagram of the identity fork — a parent's email change forks a duplicate parent and student row, which bill_period then bills as 44 invoices sharing one issued_at timestamp](images/double-billing-identity-fork-sequence.png)
 
 ## Timeline
