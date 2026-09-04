@@ -1,8 +1,11 @@
 # automated-invoicing-system
 
-Fortnightly tutoring invoicing: bill unbilled lessons, generate invoice documents, email them out. SQLite is the source of truth, Google Sheets is a human-facing view.
-
 [![CI](https://github.com/Bergstefann/automated-invoicing-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Bergstefann/automated-invoicing-system/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![Invoicing pipeline architecture — a Google Sheet syncs into SQLite, the Pipeline reads unbilled lessons and calls DocProvider and EmailProvider, and writes billed status back to the Sheet; DocProvider, EmailProvider, and the Sheet each swap to an in-memory fake for demo mode and tests](docs/images/pipeline-architecture.png)
+
+Fortnightly tutoring invoicing: bill unbilled lessons, generate invoice documents, email them out. SQLite is the source of truth, Google Sheets is a human-facing view.
 
 ## The problem
 
@@ -19,6 +22,18 @@ This repository is a from-scratch rebuild of the same pipeline. Same business ru
 [**Double-billing from a forked student identity**](docs/POSTMORTEM-double-billing.md) (2026-08-16). A parent's contact email changing between two syncs forked a duplicate student record, and a real run billed and partly emailed 44 invoices instead of 22. Root-caused from the live database, fixed, and covered by a regression test. The full writeup, including what's still open, is at the link.
 
 Much of the design below is a direct response to it.
+
+## Business rules
+
+The test suite exists to prove these hold:
+
+1. **Idempotency.** A lesson is never billed twice. Once `billed_invoice_id` is set it's excluded from every future query, so re-running on an already-billed period creates zero new invoices.
+2. **Only attended lessons are billable.** Absences are excluded, notified or not.
+3. **Period boundaries are exact and inclusive.** A lesson on a boundary date lands in exactly one 14-day period.
+4. **Invoice numbers are unique** and follow the original scheme (`DDMMYY` plus a 2-digit daily sequence). They're grounded in a database count rather than an in-process rank, so two runs on the same day can't collide. The original could.
+5. **Totals are correct.** Integer cents throughout, no floats. GST is hardcoded to `$0.00`, matching the original, which never calculated it either. A disclosed simplification, not a solved feature.
+6. **Dry-run changes nothing.** No writes to the database, the Sheet, or email.
+7. **Partial failure doesn't corrupt state.** Billing and emailing are independent phases: billing creates an invoice with `emailed_at = NULL`, and a separate phase sends every invoice still `NULL`. If a batch send fails partway, sent invoices stay sent and the rest stay queued. The next run resumes exactly where it left off.
 
 ## Try it in 30 seconds
 
@@ -94,20 +109,6 @@ The contract is validated two ways:
 
 The workbook loader is fully implemented and tested but not yet wired into the CLI as a live source. See ["What I'd do next"](#what-id-do-next).
 
-![Invoicing pipeline architecture — a Google Sheet syncs into SQLite, the Pipeline reads unbilled lessons and calls DocProvider and EmailProvider, and writes billed status back to the Sheet; DocProvider, EmailProvider, and the Sheet each swap to an in-memory fake for demo mode and tests](docs/images/pipeline-architecture.png)
-
-## Business rules
-
-The test suite exists to prove these hold:
-
-1. **Idempotency.** A lesson is never billed twice. Once `billed_invoice_id` is set it's excluded from every future query, so re-running on an already-billed period creates zero new invoices.
-2. **Only attended lessons are billable.** Absences are excluded, notified or not.
-3. **Period boundaries are exact and inclusive.** A lesson on a boundary date lands in exactly one 14-day period.
-4. **Invoice numbers are unique** and follow the original scheme (`DDMMYY` plus a 2-digit daily sequence). They're grounded in a database count rather than an in-process rank, so two runs on the same day can't collide. The original could.
-5. **Totals are correct.** Integer cents throughout, no floats. GST is hardcoded to `$0.00`, matching the original, which never calculated it either. A disclosed simplification, not a solved feature.
-6. **Dry-run changes nothing.** No writes to the database, the Sheet, or email.
-7. **Partial failure doesn't corrupt state.** Billing and emailing are independent phases: billing creates an invoice with `emailed_at = NULL`, and a separate phase sends every invoice still `NULL`. If a batch send fails partway, sent invoices stay sent and the rest stay queued. The next run resumes exactly where it left off.
-
 ## Data model
 
 ![Invoicing data model — Parents, Students, Lessons, Billing periods, Invoices, and Invoice lines, with Invoices as the aggregate root joining Students, Parents, and Billing periods](docs/images/invoicing-data-model-er.png)
@@ -158,7 +159,11 @@ A `conftest.py` fixture monkeypatches `socket.socket` to raise on any real conne
 
 The domain is inherently recurring: a fortnight closes, and someone has to notice and decide whether to bill it. Nothing in this repo bills or emails unattended, on purpose.
 
-[`deploy/scheduled_preview.py`](deploy/scheduled_preview.py) runs on a weekly [GitHub Actions schedule](.github/workflows/scheduled-preview.yml). It syncs the Sheet, works out whether the most recently completed period is unbilled, and emails the operator a preview. Never `run --confirm`. Both `sync` and `preview` are zero-write from a billing perspective. Billing stays a deliberate manual `invoicing run --period N --real --no-dry-run --confirm`, run by a human who has just read the preview.
+[`deploy/scheduled_preview.py`](deploy/scheduled_preview.py) runs on a weekly [GitHub Actions schedule](.github/workflows/scheduled-preview.yml). It syncs the Sheet, works out whether the most recently completed period is unbilled, and emails the operator a preview. Never `run --confirm`. Both `sync` and `preview` are zero-write from a billing perspective. Billing stays a deliberate manual run by a human who has just read the preview:
+
+```bash
+invoicing run --period N --real --no-dry-run --confirm
+```
 
 This is a direct response to [the double-billing incident](docs/POSTMORTEM-double-billing.md). That happened because the pipeline trusted its own state without a human checking it against what had changed upstream. Automating the noticing is safe. Automating the deciding is what went wrong.
 
@@ -193,3 +198,7 @@ A focused remediation pass (2026-08-16/17), prompted by the incident above:
 - Replaced the cached OAuth token's on-disk format. It was a pickle in a file named `token.json`; it's real JSON now, with an automatic one-time migration.
 - Added the weekly scheduled preview described above.
 - Added a minimal schema-version migration path, so a database created before a column existed gets brought forward safely instead of silently missing it. That gap is what let the incident's root cause go undetected as long as it did.
+
+## License
+
+[MIT](LICENSE)
