@@ -35,7 +35,7 @@ def test_loads_and_migrates_a_legacy_pickle_token_in_place(tmp_path: Path) -> No
     with open(token_file, "wb") as f:
         pickle.dump(_fake_credentials(), f)
 
-    creds = _load_cached_token(token_file)
+    creds = _load_cached_token(token_file, OAUTH_SCOPES)
 
     assert creds.refresh_token == "fake-refresh-token"
     # The file on disk is now real JSON, not a pickle.
@@ -49,7 +49,7 @@ def test_loads_an_already_migrated_json_token_without_touching_it(tmp_path: Path
     token_file.write_text(_fake_credentials().to_json())
     original_contents = token_file.read_text()
 
-    creds = _load_cached_token(token_file)
+    creds = _load_cached_token(token_file, OAUTH_SCOPES)
 
     assert creds.refresh_token == "fake-refresh-token"
     assert token_file.read_text() == original_contents

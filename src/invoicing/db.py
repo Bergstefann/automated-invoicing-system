@@ -113,9 +113,7 @@ def _add_student_id_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(students)")}
     if "student_id" not in columns:
         conn.execute("ALTER TABLE students ADD COLUMN student_id TEXT")
-    rows = conn.execute(
-        "SELECT id FROM students WHERE student_id IS NULL ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT id FROM students WHERE student_id IS NULL ORDER BY id").fetchall()
     conn.executemany(
         "UPDATE students SET student_id = ? WHERE id = ?",
         [(f"S-{row[0]:04d}", row[0]) for row in rows],
@@ -221,9 +219,7 @@ class Database:
         new_id = cur.lastrowid
         assert new_id is not None
         student_id = f"S-{new_id:04d}"
-        self.conn.execute(
-            "UPDATE students SET student_id = ? WHERE id = ?", (student_id, new_id)
-        )
+        self.conn.execute("UPDATE students SET student_id = ? WHERE id = ?", (student_id, new_id))
         self.conn.commit()
         return student.model_copy(update={"id": new_id, "student_id": student_id})
 

@@ -80,23 +80,21 @@ The contract is validated two ways:
 - **`templates/lesson_schedule.xlsx`**, the contract as a real, usable workbook: a Legend sheet (schema version, column glossary), a Students sheet (the identity register), and a Schedule sheet (one row per lesson, `student_id` validated against the register via dropdown, not free text). It's simultaneously the spec, a fillable template, and a test fixture. `tests/unit/test_workbook.py` loads this exact committed file through the real loader, so the doc and the code can't silently drift apart. Read via `invoicing.workbook.load_schedule_workbook`.
 - **The live Google Sheet, unchanged in layout.** `GoogleSheetProvider` still parses its native wrapped weekly-block grid the way it always has (that's a property of the live Sheet, out of scope for this work), then `sync_schedule_into_db` resolves each Sheet-native first name to the database's `student_id` once, at sync time. From there on, critically including the Sheet write-back that `mark_lessons_billed` performs after billing, `student_id` is what moves, never a re-derived name. That write-back path used to reconstruct a first name by splitting the database's display name (`student.name.split()[0]`), which is exactly the kind of fragile, mutable-field lookup that caused the original incident. It's now keyed by `student_id` throughout, via an identity map built once from the same join that creates the identity.
 
-| Legend | Students (identity register) | Schedule (one row per lesson) |
-|---|---|---|
-| ![Legend sheet](docs/images/schedule-workbook-legend.png) | ![Students sheet](docs/images/schedule-workbook-students.png) | ![Schedule sheet](docs/images/schedule-workbook-schedule.png) |
+**Legend**
+
+![Legend sheet](docs/images/schedule-workbook-legend.png)
+
+**Students** (identity register)
+
+![Students sheet](docs/images/schedule-workbook-students.png)
+
+**Schedule** (one row per lesson)
+
+![Schedule sheet](docs/images/schedule-workbook-schedule.png)
 
 The workbook loader is fully implemented and tested but not yet wired into the CLI as a live source. See ["What I'd do next"](#what-id-do-next).
 
-```mermaid
-flowchart LR
-    Sheet[("Google Sheet\n(human view)")] -- sync --> DB[("SQLite\n(source of truth)")]
-    DB -- bill_period --> Pipeline
-    Pipeline -- create_invoice_doc / export_pdf --> Docs[DocProvider]
-    Pipeline -- send --> Email[EmailProvider]
-    Pipeline -- mark_lessons_billed --> Sheet
-    Docs -.demo/tests.-> FakeDocs[FakeDocProvider]
-    Email -.demo/tests.-> FakeEmail[FakeEmailProvider]
-    Sheet -.demo/tests.-> FakeSheet[FakeSheetProvider]
-```
+![Invoicing pipeline architecture — a Google Sheet syncs into SQLite, the Pipeline reads unbilled lessons and calls DocProvider and EmailProvider, and writes billed status back to the Sheet; DocProvider, EmailProvider, and the Sheet each swap to an in-memory fake for demo mode and tests](docs/images/pipeline-architecture.png)
 
 ## Business rules
 
@@ -111,67 +109,6 @@ The test suite exists to prove these hold:
 7. **Partial failure doesn't corrupt state.** Billing and emailing are independent phases: billing creates an invoice with `emailed_at = NULL`, and a separate phase sends every invoice still `NULL`. If a batch send fails partway, sent invoices stay sent and the rest stay queued. The next run resumes exactly where it left off.
 
 ## Data model
-
-```mermaid
-erDiagram
-    PARENTS ||--o{ STUDENTS : has
-    STUDENTS ||--o{ LESSONS : has
-    STUDENTS ||--o{ INVOICES : "billed to"
-    PARENTS ||--o{ INVOICES : "billed to"
-    BILLING_PERIODS ||--o{ INVOICES : covers
-    INVOICES ||--o{ INVOICE_LINES : has
-    LESSONS ||--o| INVOICE_LINES : "billed as"
-
-    PARENTS {
-        int id PK
-        string name
-        string email
-    }
-    STUDENTS {
-        int id PK
-        string student_id "S-0001 format, issued once"
-        string name
-        int parent_id FK
-        string instrument
-        int rate_cents
-        string school
-        bool active
-    }
-    LESSONS {
-        int id PK
-        int student_id FK
-        date lesson_date
-        int duration_minutes
-        string attendance_status
-        int billed_invoice_id FK "nullable"
-        bool pre_billed
-    }
-    BILLING_PERIODS {
-        int id PK
-        int period_number
-        date start_date
-        date end_date
-    }
-    INVOICES {
-        int id PK
-        string invoice_number
-        int student_id FK
-        int parent_id FK
-        int period_id FK
-        datetime issued_at
-        int subtotal_cents
-        int gst_cents
-        int total_cents
-        string doc_url
-        datetime emailed_at "nullable"
-    }
-    INVOICE_LINES {
-        int id PK
-        int invoice_id FK
-        int lesson_id FK
-        int rate_cents
-    }
-```
 
 ![Invoicing data model — Parents, Students, Lessons, Billing periods, Invoices, and Invoice lines, with Invoices as the aggregate root joining Students, Parents, and Billing periods](docs/images/invoicing-data-model-er.png)
 

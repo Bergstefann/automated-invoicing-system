@@ -58,12 +58,19 @@ from invoicing.templates.invoice_doc import build_replacements
 
 logger = logging.getLogger("invoicing.providers.google")
 
-OAUTH_SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
+SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+DOCS_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive",
-    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/drive.file",
 ]
+EMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+
+# Least-privilege split: each provider requests only the scopes it uses (see
+# docs/POSTMORTEM-double-billing.md sibling finding — the scheduled-preview CI
+# credential used to mint a token with full Gmail + Drive access despite only
+# reading Sheets and sending mail). Kept here as the union for reference; no
+# code path requests this directly.
+OAUTH_SCOPES = SHEETS_SCOPES + DOCS_DRIVE_SCOPES + EMAIL_SCOPES
 
 STUDENT_CONFIG_RANGE = "Student Config!A:E"
 _DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})$")
@@ -101,7 +108,7 @@ def _col_letter(zero_based_index: int) -> str:
     return result
 
 
-def _load_cached_token(token_file: Path) -> Credentials:
+def _load_cached_token(token_file: Path, scopes: list[str]) -> Credentials:
     """Loads the cached token, migrating a legacy pickle in place if that's
     what's found. Token files used to be written with `pickle.dump` despite
     the documented `.json` extension; `from_authorized_user_file` expects
@@ -111,7 +118,7 @@ def _load_cached_token(token_file: Path) -> Credentials:
     trigger below.
     """
     try:
-        return Credentials.from_authorized_user_file(str(token_file), OAUTH_SCOPES)
+        return Credentials.from_authorized_user_file(str(token_file), scopes)
     except ValueError:
         with open(token_file, "rb") as f:
             creds: Credentials = pickle.load(f)
@@ -120,21 +127,34 @@ def _load_cached_token(token_file: Path) -> Credentials:
         return creds
 
 
-def _oauth_credentials(settings: Settings) -> Credentials:
+def _oauth_credentials(settings: Settings, scopes: list[str]) -> Credentials:
+    """Requests credentials scoped to exactly what the calling provider
+    needs (see `SHEETS_SCOPES` / `DOCS_DRIVE_SCOPES` / `EMAIL_SCOPES`), not
+    the full union — a token minted for one narrowly-scoped run (e.g. the
+    scheduled-preview CI job, which only touches Sheets + Gmail send) never
+    carries Drive/Docs access it doesn't need.
+    """
     assert settings.oauth_client_secret_file is not None
     assert settings.oauth_token_file is not None
 
     creds: Credentials | None = None
     if settings.oauth_token_file.exists():
-        creds = _load_cached_token(settings.oauth_token_file)
+        creds = _load_cached_token(settings.oauth_token_file, scopes)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                str(settings.oauth_client_secret_file), OAUTH_SCOPES
+                str(settings.oauth_client_secret_file), scopes
             )
-            creds = flow.run_local_server(port=0)
+            # Fixed port + explicit IPv4 host: a random port (port=0) plus
+            # the library's default host="localhost" leaves the bind address
+            # ambiguous (IPv4 vs IPv6) on Windows, which some local security
+            # software also probes right after the socket opens -- that can
+            # satisfy the server's single-request handler before the real
+            # browser callback arrives, so the terminal returns immediately
+            # and the browser then hits a dead socket ("Unable to connect").
+            creds = flow.run_local_server(host="127.0.0.1", port=8765)
         settings.oauth_token_file.write_text(creds.to_json())
     return creds
 
@@ -171,15 +191,16 @@ class GoogleSheetProvider:
     that ordering.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else SHEETS_SCOPES
         self._service: Any | None = None
         self._cell_index: dict[tuple[str, date], tuple[int, int]] = {}
         self._identity_map: dict[str, str] = {}
 
     def _sheets(self) -> Any:
         if self._service is None:
-            creds = _oauth_credentials(self._settings)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._service = build("sheets", "v4", credentials=creds).spreadsheets()
         return self._service
 
@@ -361,14 +382,15 @@ def _parse_blocked_schedule(
 class GoogleDocProvider:
     """Wraps Docs + Drive. Auth is the shared OAuth installed-app flow."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else DOCS_DRIVE_SCOPES
         self._docs: Any | None = None
         self._drive: Any | None = None
 
     def _services(self) -> tuple[Any, Any]:
         if self._docs is None or self._drive is None:
-            creds = _oauth_credentials(self._settings)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._docs = build("docs", "v1", credentials=creds)
             self._drive = build("drive", "v3", credentials=creds)
         return self._docs, self._drive
@@ -424,13 +446,14 @@ class GoogleDocProvider:
 class GoogleEmailProvider:
     """Wraps Gmail. Auth is the same shared OAuth installed-app flow."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, scopes: list[str] | None = None) -> None:
         self._settings = settings
+        self._scopes = scopes if scopes is not None else EMAIL_SCOPES
         self._gmail: Any | None = None
 
     def _service(self) -> Any:
         if self._gmail is None:
-            creds = _oauth_credentials(self._settings)
+            creds = _oauth_credentials(self._settings, self._scopes)
             self._gmail = build("gmail", "v1", credentials=creds)
         return self._gmail
 
